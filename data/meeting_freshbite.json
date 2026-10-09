@@ -1,0 +1,287 @@
+{
+ "id": "freshbite_order_flow",
+ "title": "FreshBite: order & delivery flow workshop",
+ "topic": "Designing the order and delivery flow (and the systems behind it) for FreshBite, a food-delivery app.",
+ "participants": [
+  {
+   "name": "Maja",
+   "role": "Product owner, FreshBite (client)",
+   "color": "#e8590c"
+  },
+  {
+   "name": "Stefan",
+   "role": "Solution architect",
+   "color": "#1971c2"
+  },
+  {
+   "name": "Nikola",
+   "role": "Backend developer",
+   "color": "#2f9e44"
+  },
+  {
+   "name": "Lena",
+   "role": "UX designer",
+   "color": "#9c36b5"
+  }
+ ],
+ "utterances": [
+  {
+   "id": "u01",
+   "speaker": "Nikola",
+   "pause": 0.5,
+   "text": "Can everyone hear me? My mic was acting up earlier this morning."
+  },
+  {
+   "id": "u02",
+   "speaker": "Lena",
+   "pause": 1.0,
+   "text": "Yep, loud and clear. Let me just grab a coffee, one second."
+  },
+  {
+   "id": "u03",
+   "speaker": "Maja",
+   "pause": 1.5,
+   "text": "Okay, let's start. Today I want us to sketch the whole order flow for the new FreshBite app, from the moment the customer opens the app until the food arrives."
+  },
+  {
+   "id": "u04",
+   "speaker": "Stefan",
+   "pause": 1.2,
+   "text": "Let's start with the customer. The customer browses restaurants and adds dishes to a cart."
+  },
+  {
+   "id": "u05",
+   "speaker": "Lena",
+   "pause": 1.0,
+   "text": "Then they hit checkout, where they pick the delivery address and a time slot."
+  },
+  {
+   "id": "u06",
+   "speaker": "Nikola",
+   "pause": 1.4,
+   "text": "After checkout we charge the card directly with the bank, and then we create the order."
+  },
+  {
+   "id": "u07",
+   "speaker": "Stefan",
+   "pause": 0.6,
+   "text": "No, wait. The payment has to go through the payment gateway first. We never talk to the bank directly, the gateway handles that for us."
+  },
+  {
+   "id": "u08",
+   "speaker": "Nikola",
+   "pause": 1.0,
+   "text": "Right, fair, the gateway then. And the order only gets created once the gateway confirms the payment."
+  },
+  {
+   "id": "u09",
+   "speaker": "Lena",
+   "pause": 1.6,
+   "text": "What happens if the payment fails? Do we show a retry screen or send them back to the cart?"
+  },
+  {
+   "id": "u10",
+   "speaker": "Maja",
+   "pause": 1.0,
+   "text": "Good question. Let's park that for now."
+  },
+  {
+   "id": "u11",
+   "speaker": "Stefan",
+   "pause": 1.5,
+   "text": "Once the order exists, it goes to the restaurant. The restaurant gets it on their tablet app and accepts it."
+  },
+  {
+   "id": "u12",
+   "speaker": "Nikola",
+   "pause": 1.2,
+   "text": "And then we need to assign a courier. I'd do that immediately when the order is created, so the courier drives over while the food is being cooked."
+  },
+  {
+   "id": "u13",
+   "speaker": "Maja",
+   "pause": 0.8,
+   "text": "Hmm, I don't agree with that. Last year couriers were waiting twenty minutes at restaurants. A courier should only be assigned after the restaurant accepts and the food is almost ready."
+  },
+  {
+   "id": "u14",
+   "speaker": "Nikola",
+   "pause": 0.7,
+   "text": "But then delivery times go up. Customers waiting longer is worse than a courier waiting."
+  },
+  {
+   "id": "u15",
+   "speaker": "Lena",
+   "pause": 1.2,
+   "text": "Sorry, someone's at the door, back in a sec."
+  },
+  {
+   "id": "u16",
+   "speaker": "Stefan",
+   "pause": 1.4,
+   "text": "Let's leave the courier timing open and come back to it. Meanwhile: the restaurant marks the food as ready, the courier picks it up, and delivers it to the customer."
+  },
+  {
+   "id": "u17",
+   "speaker": "Lena",
+   "pause": 1.5,
+   "text": "I'm back. On the customer side I want live tracking on a map from the moment the courier picks up the food."
+  },
+  {
+   "id": "u18",
+   "speaker": "Nikola",
+   "pause": 1.2,
+   "text": "Then we also need a notification service that sends a push notification at every status change."
+  },
+  {
+   "id": "u19",
+   "speaker": "Lena",
+   "pause": 1.0,
+   "text": "And we should send an SMS for every status change too."
+  },
+  {
+   "id": "u20",
+   "speaker": "Lena",
+   "pause": 1.8,
+   "text": "Actually, scratch that, forget the SMS. Push is enough, and SMS costs too much."
+  },
+  {
+   "id": "u21",
+   "speaker": "Maja",
+   "pause": 0.8,
+   "text": "Agreed, push only."
+  },
+  {
+   "id": "u22",
+   "speaker": "Stefan",
+   "pause": 1.6,
+   "text": "Who handles refunds if the restaurant rejects the order? Is that us or the restaurant?"
+  },
+  {
+   "id": "u23",
+   "speaker": "Nikola",
+   "pause": 1.4,
+   "text": "Also, do we store card details ourselves at all? I'd rather not."
+  },
+  {
+   "id": "u24",
+   "speaker": "Stefan",
+   "pause": 0.8,
+   "text": "No, we never store cards. The gateway gives us a payment token and we keep only that."
+  },
+  {
+   "id": "u25",
+   "speaker": "Maja",
+   "pause": 1.6,
+   "text": "One correction on the restaurant part: restaurants don't use a separate tablet app anymore. They get the orders through the POS integration we're building."
+  },
+  {
+   "id": "u26",
+   "speaker": "Nikola",
+   "pause": 2.0,
+   "text": "Okay, I thought about the courier thing again. What if we assign the courier when the restaurant accepts, but use the restaurant's prep-time estimate so the courier arrives just as the food is ready?"
+  },
+  {
+   "id": "u27",
+   "speaker": "Maja",
+   "pause": 0.9,
+   "text": "Yes, that works for me. Assign on acceptance, timed by the prep estimate."
+  },
+  {
+   "id": "u28",
+   "speaker": "Nikola",
+   "pause": 0.8,
+   "text": "Deal. That fixes the waiting problem and keeps delivery fast."
+  },
+  {
+   "id": "u29",
+   "speaker": "Lena",
+   "pause": 1.5,
+   "text": "Is anyone else's video freezing? Mine keeps freezing."
+  },
+  {
+   "id": "u30",
+   "speaker": "Stefan",
+   "pause": 1.2,
+   "text": "Mine's fine. Okay, the flow looks good. Let me switch gears and map the systems behind it, because the integrations are where the risk is."
+  },
+  {
+   "id": "u31",
+   "speaker": "Stefan",
+   "pause": 1.0,
+   "text": "In the middle we have the order service. The customer app and the restaurant POS integration both talk to it."
+  },
+  {
+   "id": "u32",
+   "speaker": "Nikola",
+   "pause": 1.3,
+   "text": "The order service calls the payment service, and the payment service is the only thing that talks to the payment gateway."
+  },
+  {
+   "id": "u33",
+   "speaker": "Nikola",
+   "pause": 1.2,
+   "text": "Courier dispatch is a separate service, and it pulls the courier locations from the courier app."
+  },
+  {
+   "id": "u34",
+   "speaker": "Stefan",
+   "pause": 0.7,
+   "text": "Actually no, the other way around: the courier app pushes its location to dispatch every few seconds. Dispatch doesn't pull."
+  },
+  {
+   "id": "u35",
+   "speaker": "Lena",
+   "pause": 1.4,
+   "text": "The tracking map in the customer app reads the courier position from dispatch too, over a websocket."
+  },
+  {
+   "id": "u36",
+   "speaker": "Maja",
+   "pause": 1.5,
+   "text": "And everything should end up in our analytics warehouse. The finance team needs it for reporting."
+  },
+  {
+   "id": "u37",
+   "speaker": "Nikola",
+   "pause": 1.2,
+   "text": "Do we do that with events, like Kafka, or with a nightly batch export?"
+  },
+  {
+   "id": "u38",
+   "speaker": "Stefan",
+   "pause": 1.0,
+   "text": "I'd go with events. The order service publishes order events to a message bus, and the notification service and the warehouse subscribe to it."
+  },
+  {
+   "id": "u39",
+   "speaker": "Nikola",
+   "pause": 0.8,
+   "text": "I'm not sure we need a bus on day one. A nightly export would be much simpler to run."
+  },
+  {
+   "id": "u40",
+   "speaker": "Maja",
+   "pause": 1.4,
+   "text": "Let's not decide that today. Who owns the POS integration, by the way? Us, or the restaurant chain's IT?"
+  },
+  {
+   "id": "u41",
+   "speaker": "Lena",
+   "pause": 1.6,
+   "text": "I need to drop in five minutes, I have another call."
+  },
+  {
+   "id": "u42",
+   "speaker": "Maja",
+   "pause": 1.0,
+   "text": "Okay, let's wrap up. Stefan, can you clean up both diagrams and send them around?"
+  },
+  {
+   "id": "u43",
+   "speaker": "Stefan",
+   "pause": 0.8,
+   "text": "Sure, I'll send them today. Thanks everyone!"
+  }
+ ]
+}

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Whiteboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Kalam:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" class="logo" aria-hidden="true">
+        <rect x="3" y="5" width="26" height="19" rx="3" fill="#fff" stroke="currentColor" stroke-width="2"/>
+        <path d="M8 18 L13 12 L17 15 L23 9" fill="none" stroke="#e8590c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M11 28 L16 24 L21 28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="brand-name">Live Whiteboard</div>
+        <div class="meeting-title" id="meetingTitle">Loading meeting…</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="seg" id="modeSeg" role="group" aria-label="Mode">
+        <button data-mode="live" class="on">Live (AI)</button>
+        <button data-mode="replay">Replay</button>
+      </div>
+      <select id="runSelect" class="run-select" title="Recorded run to replay" hidden></select>
+      <button id="btnStart" class="btn primary">▶ Start meeting</button>
+      <button id="btnPause" class="btn" disabled>❚❚ Pause</button>
+      <div class="seg" id="speedSeg" role="group" aria-label="Speed">
+        <button data-speed="1" class="on">1×</button>
+        <button data-speed="2">2×</button>
+        <button data-speed="4">4×</button>
+      </div>
+      <button id="btnReset" class="btn ghost">↺ Reset</button>
+    </div>
+
+    <div class="status">
+      <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Idle</span></span>
+    </div>
+  </header>
+
+  <div class="progress"><div id="progressBar"></div></div>
+
+  <main class="layout">
+    <!-- Meeting panel -->
+    <section class="panel meeting">
+      <div class="panel-head"><h2>Meeting</h2><span class="sub" id="uttCount">0 / 0</span></div>
+      <div class="participants" id="participants"></div>
+      <div class="panel-head small"><h3>Live transcript</h3><span class="sub">simulated · no audio</span></div>
+      <div class="transcript" id="transcript">
+        <div class="empty" id="transcriptEmpty">Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.</div>
+      </div>
+    </section>
+
+    <!-- Whiteboard -->
+    <section class="board-wrap">
+      <div class="board-bar">
+        <div class="tabs" id="tabs"></div>
+        <div class="board-tools">
+          <span class="legend">
+            <span class="lg lg-actor">Actor</span><span class="lg lg-system">System</span><span class="lg lg-step">Step</span><span class="lg lg-decision">Decision</span><span class="lg lg-data">Data</span>
+          </span>
+          <button class="btn tiny" id="btnTidy" title="Re-layout this board (animated)">✨ Tidy</button>
+          <button class="btn tiny" id="btnFit" title="Fit board to screen">⤢ Fit</button>
+        </div>
+      </div>
+      <div class="board" id="board">
+        <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+              <circle cx="1.5" cy="1.5" r="1.3" fill="#d4d0c4"/>
+            </pattern>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+              <path d="M1 1 L9 5 L1 9" fill="none" stroke="#495057" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+            <marker id="arrow-ghost" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+              <path d="M1 1 L9 5 L1 9" fill="none" stroke="#adb5bd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+            <marker id="arrow-disputed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+              <path d="M1 1 L9 5 L1 9" fill="none" stroke="#e03131" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+            <filter id="softShadow" x="-20%" y="-20%" width="140%" height="160%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-color="#1b1b1b" flood-opacity="0.10"/>
+            </filter>
+          </defs>
+          <rect id="bgRect" x="-50000" y="-50000" width="100000" height="100000" fill="url(#dots)"/>
+          <g id="camera">
+            <g id="groupsLayer"></g>
+            <g id="edgesLayer"></g>
+            <g id="nodesLayer"></g>
+            <g id="fxLayer"></g>
+          </g>
+        </svg>
+        <div class="board-empty" id="boardEmpty">
+          <div class="board-empty-inner">
+            <div class="big">The whiteboard is empty</div>
+            <div>It fills in as the meeting talks. Nothing here is drawn by hand.</div>
+          </div>
+        </div>
+        <div class="toasts" id="toasts"></div>
+        <div class="tooltip" id="tooltip" hidden></div>
+      </div>
+    </section>
+
+    <!-- Agents panel -->
+    <section class="panel agents">
+      <div class="lists">
+        <div class="list-card">
+          <div class="panel-head small"><h3>❓ Open questions</h3><span class="count" id="qCount">0</span></div>
+          <ul class="qlist" id="questions"><li class="muted">None yet</li></ul>
+        </div>
+        <div class="list-card">
+          <div class="panel-head small"><h3>⚡ Disagreements</h3><span class="count" id="dCount">0</span></div>
+          <ul class="dlist" id="disagreements"><li class="muted">None yet</li></ul>
+        </div>
+      </div>
+      <div class="panel-head small activity-head">
+        <h3>Agent activity</h3>
+        <span class="sub" id="latencyStats">model —</span>
+      </div>
+      <div class="activity" id="activity"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+  <script src="/static/board.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

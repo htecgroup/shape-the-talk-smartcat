@@ -1,0 +1,17 @@
+[project]
+name = "live-whiteboard"
+version = "0.1.0"
+description = "Live Whiteboard POC: meeting talk becomes an animated, self-correcting diagram"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "openai>=1.60",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,273 @@
+"""LLM agents. All use OpenAI `gpt-6-luna` via Chat Completions + strict json_schema.
+
+Measured (see README): Chat Completions and the Responses API have the same
+latency for this model. reasoning_effort="none" is the fastest setting
+(modeller ~1.6 s vs ~3.7 s with "low"); with the server-side guards in
+session.py it is good enough for extractor and modeller. The analyst runs in
+the background, so it uses "low". Override with LW_*_EFFORT env vars.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from openai import AsyncOpenAI
+
+log = logging.getLogger("agents")
+
+MODEL = os.getenv("LW_MODEL", "gpt-6-luna")
+EXTRACTOR_EFFORT = os.getenv("LW_EXTRACTOR_EFFORT", "none")
+MODELLER_EFFORT = os.getenv("LW_MODELLER_EFFORT", "none")
+ANALYST_EFFORT = os.getenv("LW_ANALYST_EFFORT", "low")
+
+KINDS = ["new_info", "correction", "disagreement", "resolution", "question", "undo", "chit_chat"]
+
+_client: AsyncOpenAI | None = None
+
+
+def client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        _client = AsyncOpenAI(timeout=30, max_retries=1)
+    return _client
+
+
+@dataclass
+class CallResult:
+    data: dict | None
+    latency_ms: int
+    tokens_in: int = 0
+    tokens_out: int = 0
+    error: str | None = None
+
+
+async def call_json(name: str, system: str, user: str, schema: dict, effort: str) -> CallResult:
+    start = time.perf_counter()
+    try:
+        resp = await client().chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            reasoning_effort=effort,
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": name, "strict": True, "schema": schema}},
+        )
+        ms = int((time.perf_counter() - start) * 1000)
+        content = resp.choices[0].message.content or "{}"
+        usage = resp.usage
+        return CallResult(json.loads(content), ms,
+                          getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
+    except Exception as exc:  # network, refusal, bad JSON: never crash the live loop
+        ms = int((time.perf_counter() - start) * 1000)
+        log.warning("%s call failed after %sms: %s", name, ms, type(exc).__name__)
+        return CallResult(None, ms, error=f"{type(exc).__name__}: {str(exc)[:200]}")
+
+
+def _obj(props: dict, required: list[str] | None = None) -> dict:
+    return {"type": "object", "properties": props,
+            "required": required if required is not None else list(props), "additionalProperties": False}
+
+
+S = {"type": "string"}
+NS = {"type": ["string", "null"]}
+
+
+def _participants(meeting: dict) -> str:
+    return "\n".join(f"- {p['name']}: {p['role']}" for p in meeting["participants"])
+
+
+def _line(u: dict) -> str:
+    return f'[{u["id"]}] {u["speaker"]}: {u["text"]}'
+
+
+# ======================================================================= Extractor
+EXTRACTOR_SCHEMA = _obj({
+    "kind": {"type": "string", "enum": KINDS},
+    "claims": {"type": "array", "items": S},
+    "refers_to": NS,
+    "topic_shift": {"type": "boolean"},
+})
+
+EXTRACTOR_SYSTEM = """You are the Extractor in "Live Whiteboard", a tool that turns a live meeting into a diagram.
+You read ONE new utterance (with a little preceding context) and classify it. Be fast and literal.
+
+Meeting: {title}
+Topic: {topic}
+Participants:
+{participants}
+
+kind (pick exactly one):
+- new_info: adds facts about the process/system being designed (steps, actors, systems, data, flows, ownership). Also proposals and suggestions.
+- correction: says something said earlier (or on the board) is wrong and replaces it ("no, it goes through X first", "actually the other way around", "they don't use X anymore").
+- disagreement: objects to someone else's statement/proposal without the group settling it ("I don't agree", "but then...").
+- resolution: settles an earlier disagreement or confirms a proposal ("yes, that works", "deal", "agreed").
+- question: asks something about the design. If the same utterance also states facts, still use question only if the question is the main point.
+- undo: the speaker retracts something they said ("scratch that", "forget what I said", "ignore that").
+- chit_chat: anything not about the design: audio/video checks, coffee, greetings, logistics, people leaving, small talk, pure facilitation ("let's park that", "let's wrap up").
+A topic shift ("let me switch gears and map the systems behind it") is new_info with the claim "Topic shift: ...", never chit_chat.
+
+claims: short, self-contained factual statements about the design, written so they make sense without the context, naming actors/systems explicitly (e.g. "Payment goes from checkout to the payment gateway, not directly to the bank"). For a topic switch, include a claim like "Topic shift: now mapping the systems architecture". For questions, the question itself. For undo and chit_chat: empty list unless there is real content.
+refers_to: for correction/disagreement/resolution/undo, the id of the earlier utterance it reacts to (from the context), else null.
+topic_shift: true ONLY when the speaker explicitly moves the discussion to a different diagram or subject (e.g. "let me switch gears and map the systems behind it", "now let's look at who the stakeholders are"). Mentioning a system or service inside the current discussion is NOT a topic shift."""
+
+
+async def extract(meeting: dict, context: list[dict], utt: dict) -> CallResult:
+    system = EXTRACTOR_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
+                                     participants=_participants(meeting))
+    ctx = "\n".join(_line(u) for u in context[-6:]) or "(meeting just started)"
+    user = f"Recent context:\n{ctx}\n\nNEW utterance to classify:\n{_line(utt)}"
+    return await call_json("extraction", system, user, EXTRACTOR_SCHEMA, EXTRACTOR_EFFORT)
+
+
+# ======================================================================== Modeller
+def _op(name: str, props: dict) -> dict:
+    return _obj({"op": {"type": "string", "enum": [name]}, "src": S, **props})
+
+
+NODE_TYPE = {"type": "string", "enum": ["actor", "system", "step", "decision", "data"]}
+NEW_STATUS = {"type": "string", "enum": ["confirmed", "ghost"]}
+MARK_STATUS = {"type": "string", "enum": ["confirmed", "ghost", "disputed", "resolved"]}
+
+MODELLER_SCHEMA = _obj({
+    "summary": S,
+    "ops": {"type": "array", "items": {"anyOf": [
+        _op("add_node", {"id": S, "label": S, "type": NODE_TYPE, "status": NEW_STATUS, "group": NS, "note": NS}),
+        _op("update_node", {"id": S, "label": NS, "type": {"type": ["string", "null"],
+                            "enum": ["actor", "system", "step", "decision", "data", None]}, "note": NS}),
+        _op("remove_node", {"id": S}),
+        _op("connect", {"from": S, "to": S, "label": NS, "status": NEW_STATUS}),
+        _op("disconnect", {"edge": S}),
+        _op("reroute", {"edge": S, "via": NS, "new_from": NS, "new_to": NS, "label": NS}),
+        _op("mark", {"target": S, "status": MARK_STATUS, "note": NS}),
+        _op("add_group", {"id": S, "label": S}),
+        _op("set_group", {"node": S, "group": NS}),
+        _op("new_board", {"id": S, "title": S, "kind": {"type": "string", "enum": ["process", "architecture", "stakeholder", "mindmap"]}}),
+        _op("switch_board", {"board": S}),
+        _op("undo", {"target_src": S}),
+    ]}},
+})
+
+MODELLER_SYSTEM = """You are the Board Modeller in "Live Whiteboard". While a meeting is happening you keep a whiteboard diagram in sync with what people say. You never draw: you emit a short list of edit operations (a diff) against the current board JSON. A deterministic renderer animates them, so keep diffs minimal and keep ids stable.
+
+Meeting: {title}
+Topic: {topic}
+Participants:
+{participants}
+
+BOARDS. Each board is one diagram (a tab). kind: process (steps in order), architecture (systems and how they talk), stakeholder, mindmap.
+If there is no board yet, your first op must be new_board (for this meeting the first board is the process flow, e.g. id "order_flow").
+
+NODE TYPES
+- actor: person, role or organisation (Customer, Restaurant, Courier, Finance team).
+- system: software, service, app or external provider (Payment gateway, Order service, Customer app, POS integration).
+- step: an action in a process. Short verb phrase ("Browse restaurants", "Assign courier").
+- decision: a yes/no branch in a process ("Payment OK?"). Only when a branch is actually described.
+- data: stored data or a data store (Payment token, Analytics warehouse).
+
+LABELS & IDS: labels 1-4 words; details go in note (max 12 words). ids are short snake_case nouns, unique per board (e.g. "payment_gateway"). Reuse existing ids exactly as shown in the board JSON; never add a node that already exists. Edge ids are "<from>-><to>".
+
+EDGES: from -> to in the direction of flow. Process boards: step order (actor -> first step it does, step -> next step, step -> system it uses). Architecture boards: caller -> callee, or the direction data is sent/pushed. Edge labels only when they add meaning ("pays via", "on success", "push", "events", "websocket"), 1-3 words.
+
+KEEP IT READABLE (a whiteboard for humans, typically 8-20 nodes per board)
+- Attributes and details of a step (what the user picks, timing, "while the food cooks") go into that node's note, not into extra nodes. "At checkout they pick address and time slot" = one Checkout step with note "pick address + time slot".
+- Never fan out: a statement like "everything goes to X" or "notify at every status change" gets ONE or TWO edges from the most central node(s), with the rest in a note. Never connect more than 2 existing nodes to a new node in one utterance.
+- Do not invent steps, systems or edges nobody mentioned.
+
+HOW TO REACT
+1. new_info: add what is newly stated and connect it to the existing diagram (ideally every new node gets at least one edge). Statements of how it works or what is needed (including requirements from the client) are "confirmed". Use "ghost" only for hedged, tentative proposals ("I'd do...", "what if...", "maybe we could...", "I'd go with..."). When someone else accepts a ghost proposal, mark it (and its ghost edges) "confirmed".
+2. correction: FIX the existing diagram in place. Use reroute (via = insert a node into an edge; new_from/new_to = change ends or reverse direction; set label when the old label no longer fits, e.g. "pulls" -> "pushes"), update_node (rename/retype keeps the node's position), disconnect, remove_node. Never leave the wrong version standing next to the right one. Example: "No, payment goes through the gateway first, never to the bank directly" when checkout->bank exists => add_node payment_gateway, reroute checkout->bank via payment_gateway (or disconnect + connect), and remove the bank node if it is no longer part of the flow.
+3. disagreement: when someone objects to an element on the board, keep the element and mark it "disputed" with note "<Name>: <position> vs <Name>: <position>" (max ~16 words). If the objection is about an edge/ordering, mark the node or edge it is about.
+4. resolution: only resolve a dispute when the people in THAT dispute agree on THAT topic (check the OPEN DISPUTES list and the extractor's refers_to); agreement about something else ("agreed, push only") never resolves an unrelated dispute. Apply the agreed change to the structure: if they agree a step happens after a different step, reroute its old incoming edge with new_from (do not leave the old edge next to the new one) and mark the previously disputed element "resolved" (not "confirmed") with note "Agreed: <decision>". Remove or disconnect ghost elements of the rejected alternative. A ghost proposal that gets accepted becomes "confirmed".
+5. undo ONLY for explicit retractions of one's own words ("scratch that", "forget what I said", "forget the X"); a correction is never an undo. If the retracted utterance's changes are on the board (its id appears as "src" in the board JSON), emit exactly {{"op":"undo","target_src":"<that utterance id>"}}; this reverts everything that utterance added, so do not also remove things manually. If the retracted utterance is in the same NEW batch, simply do not model it and emit no undo.
+6. question: no nodes for questions (another agent tracks them). If an answer states facts, model the facts (e.g. a data node).
+7. chit_chat never reaches you; if an utterance has no design content, return no ops for it.
+8. Boards/tabs: stay on the current board unless an utterance is flagged TOPIC_SHIFT. Systems, apps and services mentioned while discussing the process belong on the process board as "system" nodes. On TOPIC_SHIFT (e.g. "let me map the systems behind it"): emit new_board (kind architecture, title like "System map") and build the new diagram there; elements that also exist on another board can be re-added on the new board with the same id. Going back to an earlier diagram: switch_board.
+9. Ops apply in order to the active board; later ops may reference nodes added earlier in the same list. Every op's "src" is the id of the utterance that caused it (one of the NEW utterances).
+10. Keep each utterance to the few ops it really needs (typically 1-5). Unknown fields are null.
+
+summary: max 12 words describing what you changed, e.g. "Rerouted payment through the gateway" or "No board change"."""
+
+
+def build_modeller_user(board_compact: dict, window: list[dict], new_items: list[dict]) -> str:
+    lines = []
+    for item in new_items:
+        u, ex = item["utt"], item.get("extraction") or {}
+        claims = "; ".join(ex.get("claims") or []) or "-"
+        ref = f" refers_to={ex['refers_to']}" if ex.get("refers_to") else ""
+        shift = " TOPIC_SHIFT" if ex.get("topic_shift") else ""
+        lines.append(f"{_line(u)}\n    extractor: kind={ex.get('kind', '?')}{ref}{shift} | claims: {claims}")
+    ctx = "\n".join(_line(u) for u in window) or "(none)"
+    disputes = [f'{b["id"]}/{x["id"]}: {x.get("note") or ""}' for b in board_compact["boards"]
+                for x in (b.get("nodes", []) + b.get("edges", [])) if isinstance(x, dict) and x.get("status") == "disputed"]
+    return (f"CURRENT BOARD JSON:\n{json.dumps(board_compact, ensure_ascii=False)}\n\n"
+            f"OPEN DISPUTES: {'; '.join(disputes) or 'none'}\n\n"
+            f"RECENT TRANSCRIPT (already reflected on the board):\n{ctx}\n\n"
+            f"NEW UTTERANCES to apply now (in order):\n" + "\n".join(lines))
+
+
+async def model(meeting: dict, board_compact: dict, window: list[dict], new_items: list[dict]) -> CallResult:
+    system = MODELLER_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
+                                    participants=_participants(meeting))
+    user = build_modeller_user(board_compact, window, new_items)
+    return await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT)
+
+
+# ========================================================================= Analyst
+ANALYST_SCHEMA = _obj({
+    "open_questions": {"type": "array", "items": _obj({
+        "question": S, "asked_by": S, "src": S,
+        "status": {"type": "string", "enum": ["open", "answered", "parked"]},
+        "answer": NS,
+    })},
+    "disagreements": {"type": "array", "items": _obj({
+        "topic": S,
+        "positions": {"type": "array", "items": _obj({"who": S, "position": S})},
+        "status": {"type": "string", "enum": ["open", "resolved"]},
+        "resolution": NS, "src": S,
+    })},
+    "suggested_marks": {"type": "array", "items": _obj({
+        "board": S, "target": S, "status": {"type": "string", "enum": ["resolved"]},
+        "note": S, "src": S,
+    })},
+})
+
+ANALYST_SYSTEM = """You are the Analyst, a background agent in "Live Whiteboard". You read the meeting transcript so far and the current whiteboard, and maintain two lists that are shown next to the board, plus optional corrections of dispute markers.
+
+Meeting: {title}
+Topic: {topic}
+Participants:
+{participants}
+
+open_questions: every design question raised in the meeting (not small talk like "can you hear me"). status: "answered" if someone answered it later (give the answer in <= 12 words), "parked" if the group explicitly postponed it, else "open". Questions asked implicitly as an undecided choice ("events or a nightly export?") count too. src = id of the utterance that asked it. Keep earlier entries and update their status; phrase questions in <= 14 words.
+
+disagreements: only real disagreements, where two participants argue for conflicting positions (someone objects, pushes back, or says "I'm not sure we need..."). A correction of a fact that is simply accepted ("No, it goes through the gateway" / "Right, fair") is NOT a disagreement. positions: one short entry per side (who + position, <= 12 words). status "resolved" only if they explicitly agreed later, with the resolution (<= 14 words); postponing ("let's not decide today") keeps it open. src = utterance where the disagreement started.
+
+suggested_marks: only to close stale dispute markers: for a RESOLVED disagreement whose board element is still "disputed", suggest "resolved" (note: "Agreed: <decision>"). Never mark elements that are not the subject of a disagreement in your list. target must be an existing node or edge id from the board JSON, board its board id, src the utterance id that justifies it. Usually this list is empty."""
+
+
+async def analyse(meeting: dict, transcript: list[dict], board_compact: dict,
+                  prev_questions: list, prev_disagreements: list) -> CallResult:
+    system = ANALYST_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
+                                   participants=_participants(meeting))
+    user = (f"TRANSCRIPT SO FAR:\n" + "\n".join(_line(u) for u in transcript) +
+            f"\n\nCURRENT BOARDS:\n{json.dumps(board_compact, ensure_ascii=False)}"
+            f"\n\nYOUR PREVIOUS LISTS:\nopen_questions={json.dumps(prev_questions, ensure_ascii=False)}"
+            f"\ndisagreements={json.dumps(prev_disagreements, ensure_ascii=False)}")
+    return await call_json("analysis", system, user, ANALYST_SCHEMA, ANALYST_EFFORT)
+
+
+async def warmup() -> None:
+    """Open the HTTP connection early so the first live call is not slower."""
+    try:
+        await asyncio.wait_for(client().models.retrieve(MODEL), timeout=10)
+    except Exception:
+        pass
+
+
+def jsonable(x: Any) -> Any:
+    return json.loads(json.dumps(x, default=str))
