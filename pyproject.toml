@@ -9,6 +9,7 @@ dependencies = [
     "openai>=1.60",
     "python-dotenv>=1.0",
     "websockets>=13",
+    "anthropic>=1.13.0",
 ]
 
 [dependency-groups]

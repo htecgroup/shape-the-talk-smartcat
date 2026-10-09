@@ -1,7 +1,7 @@
 """Live Whiteboard POC server.
 
 Run:  uv run uvicorn server:app --port 8010
-Open: http://localhost:8010            (simulated meeting or talk live; uses the OpenAI API)
+Open: http://localhost:8010            (simulated meeting or talk live; agents use the Anthropic API, mic transcription uses OpenAI)
       http://localhost:8010/?replay=latest   (replays the newest recorded run, no API calls)
 """
 
@@ -23,7 +23,8 @@ from whiteboard.sources import MicSource  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx2").setLevel(logging.WARNING)
+logging.getLogger("anthropic").setLevel(logging.WARNING)
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Live Whiteboard")

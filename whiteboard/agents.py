@@ -1,13 +1,10 @@
-"""LLM agents. All use OpenAI `gpt-6-luna` via Chat Completions + strict json_schema.
+"""LLM agents. All use Anthropic `claude-sonnet-5-5` via the Messages API + structured outputs (json_schema).
 
 In talk-live mode (meeting["source"] == "mic") the extractor and modeller prompts get an
 extra LIVE SPEECH section for ASR text: one speaker, fillers, fragments, long utterances.
 
-Measured (see README): Chat Completions and the Responses API have the same
-latency for this model. reasoning_effort="none" is the fastest setting
-(modeller ~1.6 s vs ~3.7 s with "low"); with the server-side guards in
-session.py it is good enough for extractor and modeller. The analyst runs in
-the background, so it uses "low". Override with LW_*_EFFORT env vars.
+All three agents run at effort "low" (output_config.effort). Override with LW_*_EFFORT env vars.
+Refusals fall back server-side (fallbacks="default") so the live loop keeps getting answers.
 """
 
 from __future__ import annotations
@@ -20,24 +17,25 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 log = logging.getLogger("agents")
 
-MODEL = os.getenv("LW_MODEL", "gpt-6-luna")
-EXTRACTOR_EFFORT = os.getenv("LW_EXTRACTOR_EFFORT", "none")
-MODELLER_EFFORT = os.getenv("LW_MODELLER_EFFORT", "none")
+MODEL = os.getenv("LW_MODEL", "claude-sonnet-5-5")
+EXTRACTOR_EFFORT = os.getenv("LW_EXTRACTOR_EFFORT", "low")
+MODELLER_EFFORT = os.getenv("LW_MODELLER_EFFORT", "low")
 ANALYST_EFFORT = os.getenv("LW_ANALYST_EFFORT", "low")
+MAX_TOKENS = 16000
 
 KINDS = ["new_info", "correction", "disagreement", "resolution", "question", "undo", "chit_chat"]
 
-_client: AsyncOpenAI | None = None
+_client: AsyncAnthropic | None = None
 
 
-def client() -> AsyncOpenAI:
+def client() -> AsyncAnthropic:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(timeout=30, max_retries=1)
+        _client = AsyncAnthropic(timeout=30, max_retries=1)
     return _client
 
 
@@ -53,18 +51,22 @@ class CallResult:
 async def call_json(name: str, system: str, user: str, schema: dict, effort: str) -> CallResult:
     start = time.perf_counter()
     try:
-        resp = await client().chat.completions.create(
+        resp = await client().beta.messages.create(
             model=MODEL,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            reasoning_effort=effort,
-            response_format={"type": "json_schema",
-                             "json_schema": {"name": name, "strict": True, "schema": schema}},
+            max_tokens=MAX_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
         )
         ms = int((time.perf_counter() - start) * 1000)
-        content = resp.choices[0].message.content or "{}"
         usage = resp.usage
-        return CallResult(json.loads(content), ms,
-                          getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
+        if resp.stop_reason in ("refusal", "max_tokens"):
+            return CallResult(None, ms, usage.input_tokens, usage.output_tokens,
+                              error=f"stop_reason={resp.stop_reason}")
+        content = next((b.text for b in resp.content if b.type == "text"), "{}")
+        return CallResult(json.loads(content), ms, usage.input_tokens, usage.output_tokens)
     except Exception as exc:  # network, refusal, bad JSON: never crash the live loop
         ms = int((time.perf_counter() - start) * 1000)
         log.warning("%s call failed after %sms: %s", name, ms, type(exc).__name__)
@@ -167,24 +169,57 @@ NODE_TYPE = {"type": "string", "enum": ["actor", "system", "step", "decision", "
 NEW_STATUS = {"type": "string", "enum": ["confirmed", "ghost"]}
 MARK_STATUS = {"type": "string", "enum": ["confirmed", "ghost", "disputed", "resolved"]}
 
+# Per-op fields. The Anthropic grammar compiler rejects a 12-way anyOf of op objects (and also
+# many nullable or optional fields) as too complex, so the schema is one flat op object with every
+# field required and "" meaning "not used for this op". _clean_ops turns that back into the per-op
+# shape (only that op's fields, "" -> null); Board.normalize still rejects ops missing a required field.
+OP_SCHEMAS = {
+    "add_node": {"id": S, "label": S, "type": NODE_TYPE, "status": NEW_STATUS, "group": NS, "note": NS},
+    "update_node": {"id": S, "label": NS, "type": NODE_TYPE, "note": NS},
+    "remove_node": {"id": S},
+    "connect": {"from": S, "to": S, "label": NS, "status": NEW_STATUS},
+    "disconnect": {"edge": S},
+    "reroute": {"edge": S, "via": NS, "new_from": NS, "new_to": NS, "label": NS},
+    "mark": {"target": S, "status": MARK_STATUS, "note": NS},
+    "add_group": {"id": S, "label": S},
+    "set_group": {"node": S, "group": NS},
+    "new_board": {"id": S, "title": S, "kind": {"type": "string", "enum": ["process", "architecture", "stakeholder", "mindmap"]}},
+    "switch_board": {"board": S},
+    "undo": {"target_src": S},
+}
+
+
+def _or_empty(prop: dict) -> dict:
+    return {"type": "string", "enum": [*prop["enum"], ""]} if "enum" in prop else S
+
+
+_OP_FIELDS: dict[str, dict] = {}
+for _props in OP_SCHEMAS.values():
+    for _k, _v in _props.items():
+        _OP_FIELDS[_k] = _or_empty(MARK_STATUS if _k == "status" else _v)
+FLAT_OP = _obj({"op": {"type": "string", "enum": list(OP_SCHEMAS)}, "src": S, **_OP_FIELDS})
+
+
+def _clean_ops(data: dict | None) -> dict | None:
+    """Give each op only its own fields, with "" (not used) as null: the shape Board expects."""
+    if not data or not isinstance(data.get("ops"), list):
+        return data
+    ops = []
+    for op in data["ops"]:
+        fields = OP_SCHEMAS.get(op.get("op"))
+        if fields is None:
+            ops.append(op)
+            continue
+        ops.append({"op": op["op"], "src": op.get("src"),
+                    **{k: (op.get(k) if op.get(k) != "" else None) for k in fields}})
+    return {**data, "ops": ops}
+
+
 MODELLER_SCHEMA = _obj({
     "summary": S,
-    "ops": {"type": "array", "items": {"anyOf": [
-        _op("add_node", {"id": S, "label": S, "type": NODE_TYPE, "status": NEW_STATUS, "group": NS, "note": NS}),
-        _op("update_node", {"id": S, "label": NS, "type": {"type": ["string", "null"],
-                            "enum": ["actor", "system", "step", "decision", "data", None]}, "note": NS}),
-        _op("remove_node", {"id": S}),
-        _op("connect", {"from": S, "to": S, "label": NS, "status": NEW_STATUS}),
-        _op("disconnect", {"edge": S}),
-        _op("reroute", {"edge": S, "via": NS, "new_from": NS, "new_to": NS, "label": NS}),
-        _op("mark", {"target": S, "status": MARK_STATUS, "note": NS}),
-        _op("add_group", {"id": S, "label": S}),
-        _op("set_group", {"node": S, "group": NS}),
-        _op("new_board", {"id": S, "title": S, "kind": {"type": "string", "enum": ["process", "architecture", "stakeholder", "mindmap"]}}),
-        _op("switch_board", {"board": S}),
-        _op("undo", {"target_src": S}),
-    ]}},
+    "ops": {"type": "array", "items": FLAT_OP},
 })
+
 
 MODELLER_SYSTEM = """You are the Board Modeller in "Live Whiteboard". While a meeting is happening you keep a whiteboard diagram in sync with what people say. You never draw: you emit a short list of edit operations (a diff) against the current board JSON. A deterministic renderer animates them, so keep diffs minimal and keep ids stable.
 
@@ -251,7 +286,9 @@ async def model(meeting: dict, board_compact: dict, window: list[dict], new_item
                                     first_board=FIRST_BOARD_LIVE if live else FIRST_BOARD_SCRIPTED,
                                     speech_notes=MODELLER_SPEECH_NOTES if live else "")
     user = build_modeller_user(board_compact, window, new_items)
-    return await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT)
+    res = await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT)
+    res.data = _clean_ops(res.data)
+    return res
 
 
 # ========================================================================= Analyst

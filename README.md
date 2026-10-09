@@ -4,7 +4,7 @@ As people talk in a meeting, their words become an animated diagram that redraws
 
 This POC simulates a 4-person brainstorm (a mock transcript, no audio and no meeting bot), and it has a
 **🎙 Talk live** mode where you speak into your microphone and the board builds from what you say (see [Talk live](#talk-live-microphone-mode)). Both drive a real
-agent pipeline on OpenAI `gpt-6-luna`: **extractor → board modeller → typed ops → versioned board → animated renderer**,
+agent pipeline on Anthropic `claude-sonnet-5-5` (effort `low`): **extractor → board modeller → typed ops → versioned board → animated renderer**,
 with a background **analyst** that keeps the open-questions and disagreements lists.
 
 ## Run it
@@ -19,14 +19,14 @@ Then open:
 
 | URL | What it does |
 |---|---|
-| http://localhost:8010 | **Simulated (AI)**: press *Start meeting*; every agent call hits the OpenAI API |
-| http://localhost:8010 → **🎙 Talk live** | Talk into the mic; OpenAI realtime transcription + the same agents |
+| http://localhost:8010 | **Simulated (AI)**: press *Start meeting*; every agent call hits the Anthropic API |
+| http://localhost:8010 → **🎙 Talk live** | Talk into the mic; OpenAI realtime transcription + the same (Anthropic) agents |
 | http://localhost:8010/?replay=latest | **Replay**: autoplays the newest complete recorded run (simulated or talk-live) with **no API calls** (demo fallback). `?replay=<file>.json` plays a specific one |
 
 Controls: the Simulated / Talk live / Replay toggle, Start, Pause/Resume (also the space bar), speed 1×/2×/4×, Reset, the Live/Replay toggle plus a run picker,
 board tabs, ✨ Tidy (a full dagre re-layout on demand), ⤢ Fit, and drag/scroll to pan and zoom. Hover a node for its note, status and who changed it.
 
-`OPENAI_API_KEY` is read from `.env` and never logged.
+`ANTHROPIC_API_KEY` (agents) and `OPENAI_API_KEY` (Talk live transcription and the test-audio script only) are read from `.env` and never logged.
 
 Other entry points:
 
@@ -39,7 +39,7 @@ uv run python scripts/simulate.py --describe runs/<file>.json
 curl -XPOST localhost:8010/api/control -d '{"cmd":"start","mode":"live","speed":2}' -H 'content-type: application/json'
 ```
 
-Optional env vars: `LW_MODEL` (default `gpt-6-luna`), `LW_EXTRACTOR_EFFORT` (`none`), `LW_MODELLER_EFFORT` (`none`),
+Optional env vars: `LW_MODEL` (default `claude-sonnet-5-5`), `LW_EXTRACTOR_EFFORT` (`low`), `LW_MODELLER_EFFORT` (`low`),
 `LW_ANALYST_EFFORT` (`low`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
 (`local`/`server`, default picked from the model), `LW_VAD_SILENCE_MS` (`700`), `LW_VAD_MIN_RMS` (`220`),
 `LW_STT_NOISE_REDUCTION` (`far_field`, `near_field` or `none`), `LW_STT_LANGUAGE` (`en`).
@@ -77,7 +77,7 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
 | `whiteboard/sources.py` | Pluggable utterance sources: `ScriptedSource` (mock meeting on the virtual clock) and `MicSource` (live speech) |
 | `whiteboard/stt.py` | OpenAI Realtime transcription client (raw WebSocket, key stays on the server) |
 | `whiteboard/audio.py` | PCM16 helpers, streaming resampler, adaptive energy VAD |
-| `whiteboard/agents.py` | The three agents: prompts, strict JSON schemas, the OpenAI call wrapper |
+| `whiteboard/agents.py` | The three agents: prompts, structured-output JSON schemas, the Anthropic call wrapper |
 | `whiteboard/board.py` | Op schema, validation, application, versioning, transactions, undo |
 | `static/board.js` | Renderer: shapes per node type, statuses, speaker-coloured highlights, stable layout, camera |
 | `static/app.js`, `static/index.html`, `static/style.css` | Meeting panel, tabs, agent activity feed, lists, controls, talk-live panel |
@@ -105,7 +105,7 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
 - **Stable layout:** a new node is placed next to the node it is connected to, and existing nodes never move. When a row is full, the flow
   drops a row and continues in the other direction (snake layout), which keeps edges short. ✨ Tidy runs dagre only when you ask for it.
 
-## Model findings (gpt-6-luna, measured 2026-10-02)
+## Model findings (gpt-6-luna, measured 2026-10-02; the agents have since moved to `claude-sonnet-5-5`)
 
 Small probe calls (throwaway scripts, not kept; 5 samples each, short prompt):
 
