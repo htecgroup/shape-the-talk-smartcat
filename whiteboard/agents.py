@@ -190,14 +190,28 @@ OP_SCHEMAS = {
 
 
 def _or_empty(prop: dict) -> dict:
-    return {"type": "string", "enum": [*prop["enum"], ""]} if "enum" in prop else S
+    return {"type": "string", "enum": [*prop["enum"], ""]} if "enum" in prop else {"type": "string"}
 
 
+def _signature(name: str, props: dict) -> str:
+    def one(k: str, v: dict) -> str:
+        optional = v is NS or (name == "update_node" and k != "id")  # update_node changes only what is given
+        values = "|".join(v["enum"]) + ("|\"\"" if optional else "") if "enum" in v else ("or \"\"" if optional else "")
+        return f"{k} ({values})" if values else k
+    return f"{name}: " + ", ".join(one(k, v) for k, v in props.items())
+
+
+# The descriptions carry what the per-op schemas used to say: which fields each op uses.
+OP_HELP = ("Fill only the fields this op uses; every other field is \"\". "
+           + "; ".join(_signature(n, p) for n, p in OP_SCHEMAS.items()))
 _OP_FIELDS: dict[str, dict] = {}
 for _props in OP_SCHEMAS.values():
     for _k, _v in _props.items():
         _OP_FIELDS[_k] = _or_empty(MARK_STATUS if _k == "status" else _v)
-FLAT_OP = _obj({"op": {"type": "string", "enum": list(OP_SCHEMAS)}, "src": S, **_OP_FIELDS})
+for _k, _v in _OP_FIELDS.items():
+    _v["description"] = "used by " + ", ".join(n for n, p in OP_SCHEMAS.items() if _k in p) + "; else \"\""
+FLAT_OP = {**_obj({"op": {"type": "string", "enum": list(OP_SCHEMAS)}, "src": S, **_OP_FIELDS}),
+           "description": OP_HELP}
 
 
 def _clean_ops(data: dict | None) -> dict | None:
