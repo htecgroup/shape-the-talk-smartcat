@@ -1,4 +1,8 @@
-"""Meeting session: simulator clock, agent pipeline, broadcasting, record & replay.
+"""Meeting session: agent pipeline, broadcasting, record & replay.
+
+Utterances come from a pluggable source (whiteboard/sources.py): the scripted mock
+meeting ("live" mode) or the browser microphone ("mic" mode). Both feed the same
+pipeline through `submit_utterance()`.
 
 One global session drives the demo. Every event that reaches the browser goes
 through `emit()`, which (a) folds it into a snapshot for late-joining clients,
@@ -18,6 +22,7 @@ from typing import Any
 
 from . import agents
 from .board import BoardState
+from .sources import MicSource, ScriptedSource, mic_meeting
 
 log = logging.getLogger("session")
 
@@ -25,7 +30,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / "runs"
 DATA_DIR = ROOT / "data"
 
-WORDS_PER_SECOND = 2.6      # ~155 wpm at 1x
 MAX_BATCH = 6               # max utterances per modeller call when a backlog builds
 ANALYST_EVERY = 4           # meaningful utterances between analyst runs
 WINDOW = 8                  # previous meaningful utterances shown to the modeller
@@ -46,7 +50,7 @@ def list_runs() -> list[dict]:
             continue
         out.append({"file": p.name, "complete": meta.get("complete", False),
                     "speed": meta.get("speed"), "title": meta.get("title"),
-                    "events": meta.get("event_count")})
+                    "source": meta.get("source", "scripted"), "events": meta.get("event_count")})
     return out
 
 
@@ -87,7 +91,7 @@ class Session:
 
     # ------------------------------------------------------------------ state
     def _reset_state(self) -> None:
-        self.mode = "idle"          # idle | live | replay
+        self.mode = "idle"          # idle | live (scripted meeting) | mic (talk live) | replay
         self.status = "idle"        # idle | running | paused | finished
         self.clock = Clock()
         self.board = BoardState()
@@ -108,6 +112,8 @@ class Session:
         self.t0 = time.perf_counter()
         self.run_file: str | None = None
         self.replay_name: str | None = None
+        self.source: ScriptedSource | MicSource | None = None
+        self.utt_timing: dict[str, dict] = {}   # mic mode: speech end / final / board times per utterance
 
     def snapshot(self) -> dict:
         return {
@@ -116,11 +122,12 @@ class Session:
             "activity": self.view_activity[-150:], "board": self.view_board,
             "questions": self.questions, "disagreements": self.disagreements,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
+            "mic": self.source.public_state() if self.source else None,
         }
 
     def _meeting_public(self) -> dict:
         m = self.meeting
-        return {"id": m.get("id"), "title": m["title"], "topic": m.get("topic"),
+        return {"id": m.get("id"), "title": m["title"], "topic": m.get("topic"), "source": m.get("source", "scripted"),
                 "participants": m["participants"], "total": len(m.get("utterances", []))}
 
     # -------------------------------------------------------------- broadcast
@@ -128,7 +135,7 @@ class Session:
         if "t" not in event:
             event["t"] = round(time.perf_counter() - self.t0, 3)
         self._reduce(event)
-        if record and self.mode == "live":
+        if record and self.mode in ("live", "mic"):
             self.timeline.append(event)
         await self._send_all(event)
 
@@ -146,11 +153,19 @@ class Session:
     def _reduce(self, ev: dict) -> None:
         t = ev["type"]
         if t == "utterance_start":
-            self.view_transcript.append({**ev["utt"], "done": False, "kind": None})
+            self.view_transcript.append({**ev["utt"], "done": False, "kind": None, "live": ev.get("live", False)})
+        elif t == "utterance_interim":
+            for u in self.view_transcript:
+                if u["id"] == ev["id"]:
+                    u["text"] = ev["text"]
         elif t == "utterance_final":
             for u in self.view_transcript:
                 if u["id"] == ev["id"]:
                     u["done"] = True
+                    if "text" in ev:
+                        u["text"] = ev["text"]
+        elif t == "utterance_drop":
+            self.view_transcript = [u for u in self.view_transcript if u["id"] != ev["id"]]
         elif t == "extraction":
             for u in self.view_transcript:
                 if u["id"] == ev["id"]:
@@ -170,11 +185,12 @@ class Session:
                          "speed": self.clock.speed, "replay_name": self.replay_name}, record=False)
 
     # --------------------------------------------------------------- controls
-    async def start(self, mode: str = "live", run: str | None = None, speed: float | None = None) -> dict:
+    async def start(self, mode: str = "live", run: str | None = None, speed: float | None = None,
+                    speaker: str | None = None, topic: str | None = None) -> dict:
         if self.status in ("running", "paused"):
             return {"ok": False, "error": "already running; reset first"}
         await self.reset(broadcast=False)
-        if speed:
+        if speed and mode != "mic":
             self.clock.speed = float(speed)
         if mode == "replay":
             path = self._resolve_run(run or "latest")
@@ -187,16 +203,26 @@ class Session:
             await self._send_all(self.snapshot())
             self._tasks = [asyncio.create_task(self._run_replay(data["events"]))]
         else:
-            self.meeting = load_meeting()
-            self.mode, self.status = "live", "running"
+            if mode == "mic":
+                self.meeting = mic_meeting(speaker, topic)
+                self.source = MicSource(self.meeting["participants"][0]["name"], topic)
+                self.source.session = self      # the browser can connect before run() starts
+                self.mode = "mic"
+            else:
+                self.meeting = load_meeting()
+                self.source = ScriptedSource(self.meeting)
+                self.mode = "live"
+            self.status = "running"
+            self.t0 = time.perf_counter()
+            self.timeline = []
             await self._send_all(self.snapshot())
-            self._tasks = [asyncio.create_task(self._run_live()),
+            self._tasks = [asyncio.create_task(self._run_source()),
                            asyncio.create_task(self._modeller_worker())]
         await self.emit_status()
         return {"ok": True, "mode": self.mode, "replay": self.replay_name}
 
     async def pause(self) -> None:
-        if self.status == "running":
+        if self.status == "running" and self.mode != "mic":   # you cannot pause someone talking
             self.clock.pause()
             self.status = "paused"
             await self.emit_status()
@@ -212,11 +238,13 @@ class Session:
         await self.emit_status()
 
     async def reset(self, broadcast: bool = True) -> None:
+        if self.source is not None:
+            await self.source.close()
         for task in self._tasks + ([self.analyst_task] if self.analyst_task else []):
             task.cancel()
         for _, task in self.pending:
             task.cancel()
-        if self.mode == "live" and self.status != "finished" and self.spoken:
+        if self.mode in ("live", "mic") and self.status != "finished" and self.spoken:
             self._save_run(complete=False)
         self._tasks = []
         self._reset_state()
@@ -248,30 +276,28 @@ class Session:
             pass
 
     # ------------------------------------------------------------------ live
-    async def _run_live(self) -> None:
+    async def _run_source(self) -> None:
         try:
             asyncio.create_task(agents.warmup())
-            self.t0 = time.perf_counter()
-            self.timeline = []
             await self.emit({"type": "meeting", "meeting": self._meeting_public()})
-            for utt in self.meeting["utterances"]:
-                await self.clock.sleep(utt.get("pause", 1.0))
-                words = len(utt["text"].split())
-                dur_1x = words / WORDS_PER_SECOND + 0.3
-                public = {"id": utt["id"], "speaker": utt["speaker"], "text": utt["text"]}
-                await self.emit({"type": "utterance_start", "utt": public,
-                                 "duration_ms": int(dur_1x * 1000 / self.clock.speed)})
-                await self.clock.sleep(dur_1x)
-                await self.emit({"type": "utterance_final", "id": utt["id"]})
-                context = list(self.spoken)
-                self.spoken.append(public)
-                task = asyncio.create_task(self._extract(context, public))
-                self.pending.append((public, task))
-                self.pending_event.set()
-            self.speech_done = True
-            self.pending_event.set()
+            await self.source.run(self)
         except asyncio.CancelledError:
-            pass
+            return
+        except Exception:
+            log.exception("utterance source crashed")
+        self.speech_done = True
+        self.pending_event.set()
+
+    async def submit_utterance(self, public: dict, speech_end_t: float | None = None) -> None:
+        """Hand one finished utterance {id, speaker, text} to the pipeline (any source)."""
+        context = list(self.spoken)
+        self.spoken.append(public)
+        if self.mode == "mic":
+            self.utt_timing[public["id"]] = {"speech_end_t": speech_end_t,
+                                             "final_t": round(time.perf_counter() - self.t0, 3)}
+        task = asyncio.create_task(self._extract(context, public))
+        self.pending.append((public, task))
+        self.pending_event.set()
 
     async def _extract(self, context: list[dict], utt: dict) -> dict:
         res = await agents.extract(self.meeting, context, utt)
@@ -363,6 +389,11 @@ class Session:
         result["rejected"] = guard_rejected + result["rejected"]
         summary = (res.data or {}).get("summary") or ("modeller error" if res.error else "")
         await self._emit_board(result, "modeller")
+        if result["applied"]:
+            now = round(time.perf_counter() - self.t0, 3)
+            for uid in batch_ids:
+                if uid in self.utt_timing:
+                    self.utt_timing[uid]["board_t"] = now
         await self.emit({"type": "activity", "item": {
             "agent": "modeller", "utts": [i["utt"]["id"] for i in items],
             "speaker": items[-1]["utt"]["speaker"], "latency_ms": res.latency_ms,
@@ -442,8 +473,11 @@ class Session:
                 lat.setdefault(ev["item"]["agent"], []).append(ev["item"]["latency_ms"])
         stats = {a: {"calls": len(v), "avg_ms": int(sum(v) / len(v)), "min_ms": min(v), "max_ms": max(v),
                      "p50_ms": sorted(v)[len(v) // 2]} for a, v in lat.items()}
+        if self.utt_timing:
+            stats["mic"] = self._mic_latency()
         data = {
             "meta": {"title": self.meeting["title"], "model": agents.MODEL,
+                     "source": self.meeting.get("source", "scripted"),
                      "efforts": {"extractor": agents.EXTRACTOR_EFFORT, "modeller": agents.MODELLER_EFFORT,
                                  "analyst": agents.ANALYST_EFFORT},
                      "speed": self.clock.speed, "complete": complete,
@@ -457,3 +491,23 @@ class Session:
         (RUNS_DIR / name).write_text(json.dumps(data, ensure_ascii=False, indent=1, default=str))
         self.run_file = name
         log.info("saved run %s (%d events) latency=%s", name, len(self.timeline), stats)
+
+    def _mic_latency(self) -> dict:
+        """speech end -> transcript final -> board updated, per utterance (mic mode)."""
+        def summary(v: list[int]) -> dict | None:
+            if not v:
+                return None
+            v = sorted(v)
+            return {"n": len(v), "avg_ms": int(sum(v) / len(v)), "p50_ms": v[len(v) // 2], "min_ms": v[0], "max_ms": v[-1]}
+        stt, e2e, f2b = [], [], []
+        for t in self.utt_timing.values():
+            if t.get("speech_end_t") is not None:
+                stt.append(int((t["final_t"] - t["speech_end_t"]) * 1000))
+                if t.get("board_t") is not None:
+                    e2e.append(int((t["board_t"] - t["speech_end_t"]) * 1000))
+            if t.get("board_t") is not None:
+                f2b.append(int((t["board_t"] - t["final_t"]) * 1000))
+        from .stt import STT_MODEL, segmentation_for
+        return {"stt_model": STT_MODEL, "segmentation": segmentation_for(STT_MODEL),
+                "speech_end_to_final": summary(stt), "final_to_board": summary(f2b),
+                "speech_end_to_board": summary(e2e), "per_utterance": self.utt_timing}

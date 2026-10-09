@@ -9,7 +9,11 @@
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
+    source: "scripted",                       // what the current meeting is: scripted | mic
+    mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
   };
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+                  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
   const KIND_LABEL = { new_info: "new info", correction: "correction", disagreement: "disagreement", resolution: "resolution", question: "question", undo: "undo", chit_chat: "chit-chat · ignored" };
   const colorOf = (name) => S.colors[name] || "#868e96";
   const initials = (n) => n.split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
@@ -30,7 +34,10 @@
       case "snapshot": return onSnapshot(ev);
       case "meeting": return setMeeting(ev.meeting);
       case "utterance_start": return onUttStart(ev);
-      case "utterance_final": return onUttFinal(ev.id);
+      case "utterance_final": return onUttFinal(ev.id, ev.text);
+      case "utterance_interim": return onUttInterim(ev.id, ev.text);
+      case "utterance_drop": return onUttDrop(ev.id);
+      case "mic_state": return onMicState(ev);
       case "extraction": return onExtraction(ev);
       case "activity": return addActivity(ev.item, true);
       case "board": return onBoard(ev);
@@ -48,6 +55,7 @@
     $("transcriptEmpty").hidden = s.transcript.length > 0;
     for (const u of s.transcript) {
       const e = addUtt(u, false);
+      if (u.live && !u.done) e.el.classList.add("speaking", "interim");
       if (u.kind) setKind(u.id, u.kind);
     }
     $("activity").replaceChildren(); S.activity = [];
@@ -56,6 +64,7 @@
     S.board = null; S.knownBoards = new Set(); S.followActive = true;
     Board.reset();
     onBoard({ board: s.board, silent: true });
+    if (s.mic) S.mic = s.mic; else if (s.mode !== "mic") S.mic = { state: "idle" };
     setStatus(s.status, s.mode, s.speed);
     fillRuns(s.runs);
     updateProgress();
@@ -70,6 +79,8 @@
   function setMeeting(m) {
     if (!m) return;
     $("meetingTitle").textContent = m.title;
+    S.source = m.source || "scripted";
+    $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime" : "simulated · no audio";
     S.total = m.total || 0;
     S.participants = m.participants;
     for (const p of m.participants) S.colors[p.name] = p.color;
@@ -93,17 +104,25 @@
     div.className = "utt";
     div.style.setProperty("--pc", colorOf(u.speaker));
     const words = u.text.split(/\s+/);
+    const body = u.live ? esc(u.text) : words.map((w) => `<span class="w${animate ? "" : " on"}">${esc(w)} </span>`).join("");
     div.innerHTML = `<div class="av">${initials(u.speaker)}</div>
       <div><div class="who">${esc(u.speaker)} <span class="uid">${u.id}</span><span class="kinds"></span></div>
-      <div class="text">${words.map((w) => `<span class="w${animate ? "" : " on"}">${esc(w)} </span>`).join("")}</div></div>`;
+      <div class="text">${body}</div></div>`;
     $("transcript").appendChild(div);
-    const entry = { el: div, words: [...div.querySelectorAll(".w")], shown: animate ? 0 : words.length, timer: null, speaker: u.speaker };
+    const entry = { el: div, words: [...div.querySelectorAll(".w")], shown: animate ? 0 : words.length, timer: null, speaker: u.speaker, live: !!u.live };
     S.utts.set(u.id, entry);
     scrollTranscript();
     return entry;
   }
 
   function onUttStart(ev) {
+    if (ev.live) {             // talk live: text streams in through utterance_interim events
+      const entry = addUtt({ ...ev.utt, live: true }, false);
+      entry.el.classList.add("speaking", "interim");
+      setSpeaking(ev.utt.speaker, true);
+      updateProgress();
+      return;
+    }
     const entry = addUtt(ev.utt, true);
     entry.el.classList.add("speaking");
     setSpeaking(ev.utt.speaker, true);
@@ -116,8 +135,28 @@
     updateProgress();
   }
 
-  function onUttFinal(id) {
+  function onUttInterim(id, text) {
     const e = S.utts.get(id); if (!e) return;
+    e.el.querySelector(".text").textContent = text;
+    scrollTranscript();
+  }
+
+  function onUttDrop(id) {
+    const e = S.utts.get(id); if (!e) return;
+    e.el.remove(); S.utts.delete(id);
+    setSpeaking(null, false);
+    updateProgress();
+  }
+
+  function onUttFinal(id, text) {
+    const e = S.utts.get(id); if (!e) return;
+    if (e.live) {
+      if (text != null) e.el.querySelector(".text").textContent = text;
+      e.el.classList.remove("speaking", "interim");
+      setSpeaking(null, false);
+      scrollTranscript();
+      return;
+    }
     clearInterval(e.timer);
     e.words.forEach((w) => w.classList.add("on"));
     e.el.classList.remove("speaking");
@@ -139,7 +178,7 @@
   function scrollTranscript() { const t = $("transcript"); t.scrollTop = t.scrollHeight; }
   function updateProgress() {
     const n = S.utts.size;
-    $("uttCount").textContent = `${n} / ${S.total || "?"} utterances`;
+    $("uttCount").textContent = S.total ? `${n} / ${S.total} utterances` : `${n} utterance${n === 1 ? "" : "s"}`;
     $("progressBar").style.width = S.total ? `${(100 * n) / S.total}%` : "0";
   }
 
@@ -271,7 +310,10 @@
     pill.className = "pill";
     const running = status === "running" || status === "paused";
     let txt = "Idle";
-    if (status === "running") { pill.classList.add(S.mode === "replay" ? "replay" : "live"); txt = S.mode === "replay" ? "Replay" : "Live · AI"; }
+    if (status === "running") {
+      pill.classList.add(S.mode === "replay" ? "replay" : "live");
+      txt = S.mode === "replay" ? "Replay" : S.mode === "mic" ? (S.mic.state === "listening" ? "Talk live · REC" : "Talk live") : "Live · AI";
+    }
     else if (status === "paused") { pill.classList.add("paused"); txt = "Paused"; }
     else if (status === "finished") { pill.classList.add("finished"); txt = "Meeting ended"; }
     $("statusText").textContent = txt;
@@ -280,6 +322,7 @@
     $("btnPause").textContent = status === "paused" ? "▶ Resume" : "❚❚ Pause";
     if (status === "paused") setSpeaking(null, false);
     if (mode && mode !== "idle") setMode(mode, true);
+    updateMicUI();
   }
 
   function setMode(mode, fromServer) {
@@ -287,7 +330,77 @@
     document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
     $("runSelect").hidden = mode !== "replay";
     $("btnStart").textContent = mode === "replay" ? "▶ Play recording" : "▶ Start meeting";
+    $("micBox").hidden = mode !== "mic";
+    $("speedSeg").hidden = mode === "mic";
+    $("btnPause").hidden = mode === "mic";
+    if (!S.utts.size) {
+      $("transcriptEmpty").innerHTML = mode === "mic"
+        ? "Press <b>Start talking</b> and describe what you are designing, out loud. Your words appear here as you speak, and the whiteboard draws itself from them."
+        : "Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.";
+    }
     if (mode === "replay" && !fromServer) loadRuns();
+    updateMicUI();
+  }
+
+  // -------------------------------------------------------------- talk live
+  const MIC_TEXT = { idle: "Mic off", connecting: "Connecting…", listening: "Listening", stopping: "Finishing…", stopped: "Mic off", error: "Mic stopped" };
+
+  function onMicState(ev) {
+    S.mic = { ...S.mic, ...ev };
+    if (ev.state === "error" && ev.error) showMicError(ev.error);
+    else if (ev.state === "listening") showMicError(ev.warning ? `Note: ${ev.warning}` : null);
+    if (ev.state === "stopped" || ev.state === "error") S.micOwner = false;
+    setStatus(S.status, S.mode, null);
+  }
+
+  function showMicError(msg) {
+    $("micErr").hidden = !msg;
+    $("micErr").textContent = msg || "";
+  }
+
+  function updateMicUI() {
+    if (S.mode !== "mic") return;
+    const running = S.status === "running";
+    const st = running ? (S.mic.state || "idle") : "idle";
+    const btn = $("btnStart");
+    $("micRec").className = `rec rec-${st}`;
+    $("micStateText").textContent = MIC_TEXT[st] || st;
+    $("micName").disabled = $("micTopic").disabled = running;
+    if (!running) { btn.disabled = false; btn.textContent = "🎙 Start talking"; return; }
+    if (st === "error") { btn.disabled = false; btn.textContent = "↻ Reconnect mic"; return; }
+    if (st === "stopping") { btn.disabled = true; btn.textContent = "Finishing…"; return; }
+    if (st === "connecting" || st === "listening") {
+      btn.disabled = !S.micOwner;       // only the browser that owns the mic can stop it
+      btn.textContent = "■ Stop";
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Finishing…";
+  }
+
+  function setLevel(rms) {
+    const db = 20 * Math.log10(Math.max(rms, 1e-6));
+    const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+    $("micLevel").style.width = `${pct}%`;
+    $("micLevel").classList.toggle("hot", pct > 92);
+  }
+
+  async function micClick() {
+    const running = S.status === "running";
+    if (running && (S.mic.state === "listening" || S.mic.state === "connecting")) { Mic.stop(); return; }
+    const resume = running && S.mic.state === "error";
+    const speaker = $("micName").value.trim() || "You";
+    const topic = $("micTopic").value.trim();
+    store.set("lw.micName", $("micName").value.trim()); store.set("lw.micTopic", topic);
+    showMicError(null);
+    $("btnStart").disabled = true;
+    $("micStateText").textContent = "Allow the microphone…";   // the browser permission prompt may be open
+    const ok = await Mic.start({ speaker, topic, resume }, {
+      onState: (ev) => onMicState(ev),
+      onLevel: (rms) => setLevel(rms),
+      onError: (msg) => { S.micOwner = false; showMicError(msg); setLevel(0); updateMicUI(); },
+    });
+    S.micOwner = ok;
+    updateMicUI();
   }
 
   async function loadRuns() {
@@ -297,7 +410,7 @@
     const sel = $("runSelect");
     const prev = sel.value;
     sel.innerHTML = `<option value="latest">Latest complete run</option>` + runs.map((r) =>
-      `<option value="${esc(r.file)}">${esc(r.file.replace(".json", ""))}${r.complete ? "" : " (partial)"} · ${r.speed}×</option>`).join("");
+      `<option value="${esc(r.file)}">${r.source === "mic" ? "🎙 " : ""}${esc(r.file.replace(".json", ""))}${r.complete ? "" : " (partial)"}${r.source === "mic" ? "" : ` · ${r.speed}×`}</option>`).join("");
     if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   }
 
@@ -311,14 +424,18 @@
     if (S.status === "running" || S.status === "paused") send({ cmd: "speed", speed: S.speed });
   }));
   $("btnStart").addEventListener("click", () => {
+    if (S.mode === "mic") return micClick();
     send({ cmd: "start", mode: S.mode, run: S.mode === "replay" ? $("runSelect").value : undefined, speed: S.speed });
   });
+  $("micName").value = store.get("lw.micName") || "";
+  $("micTopic").value = store.get("lw.micTopic") || "";
   $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
   $("btnReset").addEventListener("click", () => send({ cmd: "reset" }));
   $("btnTidy").addEventListener("click", () => Board.tidy());
   $("btnFit").addEventListener("click", () => Board.fit());
   document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "SELECT") return;
+    if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+    if (S.mode === "mic") return;        // no space-bar shortcut while talking live
     if (e.code === "Space") { e.preventDefault(); if (S.status === "running" || S.status === "paused") $("btnPause").click(); else $("btnStart").click(); }
   });
 

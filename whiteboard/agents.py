@@ -1,5 +1,8 @@
 """LLM agents. All use OpenAI `gpt-6-luna` via Chat Completions + strict json_schema.
 
+In talk-live mode (meeting["source"] == "mic") the extractor and modeller prompts get an
+extra LIVE SPEECH section for ASR text: one speaker, fillers, fragments, long utterances.
+
 Measured (see README): Chat Completions and the Responses API have the same
 latency for this model. reasoning_effort="none" is the fastest setting
 (modeller ~1.6 s vs ~3.7 s with "low"); with the server-side guards in
@@ -85,6 +88,36 @@ def _line(u: dict) -> str:
     return f'[{u["id"]}] {u["speaker"]}: {u["text"]}'
 
 
+def is_live_speech(meeting: dict) -> bool:
+    return meeting.get("source") == "mic"
+
+
+# Extra instructions when utterances come from the microphone (talk-live mode) instead of the
+# clean, speaker-labelled mock transcript. Empty for the scripted meeting, so its tuned prompts are unchanged.
+EXTRACTOR_SPEECH_NOTES = """
+
+LIVE SPEECH (this session): the utterances are automatic speech recognition of someone thinking out loud, usually ONE speaker (several people in the room may share the microphone and then all appear under one name). Expect fillers ("um", "you know", "like", "I mean"), false starts, half sentences, run-on sentences and the odd misheard word. Read for meaning, ignore the fillers, never invent content.
+- One speaker correcting themselves ("actually, no, wait, that's wrong: X") is a correction of their own earlier statement, not a disagreement.
+- A long utterance can contain several statements: list every design fact in claims, in the order spoken. If the speaker corrects themselves inside the same utterance, keep only the final version.
+- A retraction ("scratch that", "forget the SMS") is kind undo, even when the same utterance also says what to do instead; put that replacement into claims.
+- Pure thinking noises or facilitation with no design content ("okay so", "let me think", "where was I", "I think that's it") are chit_chat.
+- Utterance boundaries come from pauses, so one sentence can be split over two utterances; use the context to understand a fragment, and give it kind new_info if it adds design content.
+- If no topic was given, the first design statements define it; that is not a topic shift."""
+
+MODELLER_SPEECH_NOTES = """
+
+LIVE SPEECH (this session): utterances are speech recognition of someone thinking out loud (usually one speaker, possibly a few people sharing one microphone). They contain fillers, fragments and run-on sentences.
+- Model the meaning, not the words. Never create nodes from filler words or garbled fragments that make no sense in context.
+- Utterance boundaries come from pauses: a fragment that continues the previous utterance ("...and then it goes to the kitchen") extends what is already on the board.
+- A long utterance: apply its statements in order; where the speaker corrects themselves inside it, draw only the final version. Keep the diff readable (a long ramble rarely needs more than 6-8 ops); details go into notes.
+- kind=undo whose claims also state a replacement: emit the undo first, then model the replacement.
+- A self-correction by the single speaker is a correction (fix in place), never a dispute."""
+
+FIRST_BOARD_SCRIPTED = 'If there is no board yet, your first op must be new_board (for this meeting the first board is the process flow, e.g. id "order_flow").'
+FIRST_BOARD_LIVE = ('If there is no board yet, your first op must be new_board: kind process for a flow of steps, architecture for '
+                    'systems talking to each other; a short title naming the subject (e.g. "Mobile ordering flow") and a matching snake_case id.')
+
+
 # ======================================================================= Extractor
 EXTRACTOR_SCHEMA = _obj({
     "kind": {"type": "string", "enum": KINDS},
@@ -99,7 +132,7 @@ You read ONE new utterance (with a little preceding context) and classify it. Be
 Meeting: {title}
 Topic: {topic}
 Participants:
-{participants}
+{participants}{speech_notes}
 
 kind (pick exactly one):
 - new_info: adds facts about the process/system being designed (steps, actors, systems, data, flows, ownership). Also proposals and suggestions.
@@ -118,7 +151,8 @@ topic_shift: true ONLY when the speaker explicitly moves the discussion to a dif
 
 async def extract(meeting: dict, context: list[dict], utt: dict) -> CallResult:
     system = EXTRACTOR_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
-                                     participants=_participants(meeting))
+                                     participants=_participants(meeting),
+                                     speech_notes=EXTRACTOR_SPEECH_NOTES if is_live_speech(meeting) else "")
     ctx = "\n".join(_line(u) for u in context[-6:]) or "(meeting just started)"
     user = f"Recent context:\n{ctx}\n\nNEW utterance to classify:\n{_line(utt)}"
     return await call_json("extraction", system, user, EXTRACTOR_SCHEMA, EXTRACTOR_EFFORT)
@@ -160,7 +194,7 @@ Participants:
 {participants}
 
 BOARDS. Each board is one diagram (a tab). kind: process (steps in order), architecture (systems and how they talk), stakeholder, mindmap.
-If there is no board yet, your first op must be new_board (for this meeting the first board is the process flow, e.g. id "order_flow").
+{first_board}
 
 NODE TYPES
 - actor: person, role or organisation (Customer, Restaurant, Courier, Finance team).
@@ -190,7 +224,7 @@ HOW TO REACT
 9. Ops apply in order to the active board; later ops may reference nodes added earlier in the same list. Every op's "src" is the id of the utterance that caused it (one of the NEW utterances).
 10. Keep each utterance to the few ops it really needs (typically 1-5). Unknown fields are null.
 
-summary: max 12 words describing what you changed, e.g. "Rerouted payment through the gateway" or "No board change"."""
+summary: max 12 words describing what you changed, e.g. "Rerouted payment through the gateway" or "No board change".{speech_notes}"""
 
 
 def build_modeller_user(board_compact: dict, window: list[dict], new_items: list[dict]) -> str:
@@ -211,8 +245,11 @@ def build_modeller_user(board_compact: dict, window: list[dict], new_items: list
 
 
 async def model(meeting: dict, board_compact: dict, window: list[dict], new_items: list[dict]) -> CallResult:
+    live = is_live_speech(meeting)
     system = MODELLER_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
-                                    participants=_participants(meeting))
+                                    participants=_participants(meeting),
+                                    first_board=FIRST_BOARD_LIVE if live else FIRST_BOARD_SCRIPTED,
+                                    speech_notes=MODELLER_SPEECH_NOTES if live else "")
     user = build_modeller_user(board_compact, window, new_items)
     return await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT)
 

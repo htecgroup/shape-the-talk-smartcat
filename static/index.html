@@ -25,7 +25,8 @@
 
     <div class="controls">
       <div class="seg" id="modeSeg" role="group" aria-label="Mode">
-        <button data-mode="live" class="on">Live (AI)</button>
+        <button data-mode="live" class="on" title="Replay the scripted 4-person meeting through the AI pipeline">Simulated (AI)</button>
+        <button data-mode="mic" title="Talk into your microphone; the board builds from what you say">🎙 Talk live</button>
         <button data-mode="replay">Replay</button>
       </div>
       <select id="runSelect" class="run-select" title="Recorded run to replay" hidden></select>
@@ -50,8 +51,20 @@
     <!-- Meeting panel -->
     <section class="panel meeting">
       <div class="panel-head"><h2>Meeting</h2><span class="sub" id="uttCount">0 / 0</span></div>
+      <div class="micbox" id="micBox" hidden>
+        <div class="mic-fields">
+          <label>Your name<input id="micName" maxlength="40" placeholder="You" autocomplete="off"></label>
+          <label>What are we designing? <span class="opt">optional</span><input id="micTopic" maxlength="200" placeholder="e.g. mobile ordering for a coffee shop" autocomplete="off"></label>
+        </div>
+        <div class="mic-row">
+          <span class="rec" id="micRec"><span class="dot"></span><span id="micStateText">Mic off</span></span>
+          <div class="meter" title="Microphone level"><div id="micLevel"></div></div>
+        </div>
+        <div class="mic-err" id="micErr" hidden></div>
+        <div class="mic-hint" id="micHint">Speak in English, in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>
+      </div>
       <div class="participants" id="participants"></div>
-      <div class="panel-head small"><h3>Live transcript</h3><span class="sub">simulated · no audio</span></div>
+      <div class="panel-head small"><h3>Live transcript</h3><span class="sub" id="transcriptSub">simulated · no audio</span></div>
       <div class="transcript" id="transcript">
         <div class="empty" id="transcriptEmpty">Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.</div>
       </div>
@@ -130,6 +143,7 @@
   <script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
   <script src="/static/board.js"></script>
+  <script src="/static/mic.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

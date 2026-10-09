@@ -1,0 +1,10 @@
+Okay, so, um, let me sketch out how the mobile ordering for our coffee shop should work.
+So the customer opens the app, they pick their drinks, and then they, uh, they go to checkout.
+At checkout, the app sends the payment straight to the bank.
+Actually, no, wait, that's wrong. The payment goes through Stripe first, and Stripe talks to the bank. We never call the bank directly.
+Once the payment is confirmed, the order goes to the order service, and the order service, you know, it pushes the order to the barista tablet behind the counter.
+And then we text the customer an SMS when the drink is ready.
+Hmm. Scratch that, forget the SMS.
+We'll just send a push notification through the app instead. That's, like, way cheaper.
+And the order service should also store every order in an orders database, so that, um, later on the manager can see a daily sales report, which, I mean, it doesn't have to be fancy, just the totals per day and maybe the most popular drinks, that kind of thing.
+Okay, I think that's the basic flow. Oh, one open question: what happens if the barista runs out of oat milk? I don't know yet.
