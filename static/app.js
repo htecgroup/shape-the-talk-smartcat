@@ -268,7 +268,7 @@
   function updateLatency() {
     const agg = {};
     for (const a of S.activity) if (a.latency_ms != null) (agg[a.agent] ||= []).push(a.latency_ms);
-    const parts = ["extractor", "modeller", "analyst"].filter((k) => agg[k]).map((k) => {
+    const parts = ["extractor", "modeller", "consolidator", "analyst"].filter((k) => agg[k]).map((k) => {
       const v = agg[k]; return `${k} ${(v.reduce((s, x) => s + x, 0) / v.length / 1000).toFixed(1)}s`;
     });
     $("latencyStats").textContent = parts.length ? `avg · ${parts.join(" · ")}` : "gpt-6-luna";

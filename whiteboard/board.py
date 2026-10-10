@@ -33,6 +33,8 @@ OP_FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "undo": ({"target_src"}, set()),
 }
 COMMON_FIELDS = {"op", "src", "by", "board"}
+# Board ids often are "<subject>_<kind>"; a model that connects to the board id usually means the subject node.
+BOARD_ID_SUFFIXES = ("_system_map", "_architecture", "_process", "_diagram", "_board", "_arch", "_flow", "_map")
 
 
 class OpError(ValueError):
@@ -375,8 +377,21 @@ class BoardState:
         self._stamp(edge, op)
         self._put_edge(bid, edge, eid)
 
+    def _node_ref(self, bid: str, op: dict, key: str) -> None:
+        """Endpoint that is a board (tab) id, not a node: use the node it names, or reject clearly."""
+        ref = op.get(key)
+        if not ref or ref in self.boards[bid]["nodes"] or ref not in self.boards:
+            return
+        for suffix in BOARD_ID_SUFFIXES:
+            if ref.endswith(suffix) and ref[:-len(suffix)] in self.boards[bid]["nodes"]:
+                op[key] = ref[:-len(suffix)]
+                return
+        raise OpError(f"{op['op']}: {ref!r} is a board (tab) id, not a node")
+
     def _op_connect(self, op: dict) -> None:
         bid = self._board_for(op)
+        for key in ("from", "to"):
+            self._node_ref(bid, op, key)
         self._add_edge(bid, op["from"], op["to"], op, op.get("label"), op.get("status"), op.get("note"))
 
     def _resolve_edge(self, bid: str, ref: str, opname: str) -> dict:
@@ -398,6 +413,8 @@ class BoardState:
     def _op_reroute(self, op: dict) -> None:
         bid = self._board_for(op)
         edge = self._resolve_edge(bid, op["edge"], "reroute")
+        for key in ("via", "new_from", "new_to"):
+            self._node_ref(bid, op, key)
         via, new_from, new_to = op.get("via"), op.get("new_from"), op.get("new_to")
         label = op.get("label") if op.get("label") is not None else edge.get("label")
         if via:

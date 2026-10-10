@@ -212,3 +212,35 @@ def test_resolved_stays_resolved_when_confirmed_again():
     s.apply_ops([{"op": "mark", "target": "bank", "status": "resolved", "note": "Agreed", "src": "u3"}], by_lookup=BY)
     s.apply_ops([{"op": "mark", "target": "bank", "status": "confirmed", "note": "Agreed again", "src": "u4"}], by_lookup=BY)
     assert nodes(s)["bank"]["status"] == "resolved"
+
+
+def test_connect_to_board_id_uses_the_node_it_names():
+    s = BoardState()
+    r = s.apply_ops([
+        {"op": "new_board", "id": "live_whiteboard_architecture", "title": "Arch", "kind": "architecture", "src": "u1"},
+        {"op": "add_node", "id": "teams_bot", "label": "Teams bot", "type": "system", "src": "u1"},
+        {"op": "add_node", "id": "live_whiteboard", "label": "Live whiteboard", "type": "system", "src": "u1"},
+        {"op": "add_node", "id": "stt", "label": "STT", "type": "system", "src": "u1"},
+        {"op": "connect", "from": "teams_bot", "to": "live_whiteboard_architecture", "src": "u2"},
+        {"op": "reroute", "edge": "teams_bot->live_whiteboard", "via": "live_whiteboard_architecture", "src": "u2"},
+        {"op": "reroute", "edge": "teams_bot->live_whiteboard", "new_from": "stt", "src": "u2"},
+    ], by_lookup=BY)
+    assert r["rejected"][0]["error"] == "reroute: via must differ from the edge ends"
+    assert len(r["rejected"]) == 1 and r["applied"][4]["to"] == "live_whiteboard"
+    assert set(edges(s)) == {"stt->live_whiteboard"}
+
+
+def test_connect_to_board_id_without_matching_node_is_rejected_clearly():
+    s = base()
+    s.apply_ops([{"op": "new_board", "id": "system_map", "title": "Systems", "kind": "architecture", "src": "u1"},
+                 {"op": "add_node", "id": "api", "label": "API", "type": "system", "src": "u1"},
+                 {"op": "add_node", "id": "db", "label": "DB", "type": "data", "src": "u1"},
+                 {"op": "connect", "from": "api", "to": "db", "src": "u1"}], by_lookup=BY)
+    r = s.apply_ops([{"op": "connect", "from": "api", "to": "flow", "src": "u2"},
+                     {"op": "reroute", "edge": "api->db", "new_to": "system_map", "src": "u2"},
+                     {"op": "connect", "from": "api", "to": "nowhere", "src": "u2"}], by_lookup=BY)
+    assert [x["error"] for x in r["rejected"]] == [
+        "connect: 'flow' is a board (tab) id, not a node",
+        "reroute: 'system_map' is a board (tab) id, not a node",
+        "connect: no node 'nowhere'"]
+    assert set(edges(s)) == {"api->db"}

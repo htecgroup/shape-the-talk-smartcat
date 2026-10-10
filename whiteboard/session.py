@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,8 @@ DATA_DIR = ROOT / "data"
 MAX_BATCH = 6               # max utterances per modeller call when a backlog builds
 ANALYST_EVERY = 4           # meaningful utterances between analyst runs
 WINDOW = 8                  # previous meaningful utterances shown to the modeller
+CONSOLIDATE_EVERY = int(os.getenv("LW_CONSOLIDATE_EVERY", "6"))  # meaningful utterances between cleanup passes; 0 = off
+CONSOLIDATOR_BLOCKED = {"new_board", "switch_board", "undo"}     # the consolidator only edits the active board
 
 
 def load_meeting(path: Path | None = None) -> dict:
@@ -102,6 +105,8 @@ class Session:
         self.speech_done = False
         self.analyst_task: asyncio.Task | None = None
         self.meaningful_since_analysis = 0
+        self.consolidator_task: asyncio.Task | None = None
+        self.meaningful_since_consolidation = 0
         self.questions: list[dict] = []
         self.disagreements: list[dict] = []
         # client snapshot view (built from emitted events, works for live and replay)
@@ -240,7 +245,7 @@ class Session:
     async def reset(self, broadcast: bool = True) -> None:
         if self.source is not None:
             await self.source.close()
-        for task in self._tasks + ([self.analyst_task] if self.analyst_task else []):
+        for task in self._tasks + [t for t in (self.analyst_task, self.consolidator_task) if t]:
             task.cancel()
         for _, task in self.pending:
             task.cancel()
@@ -340,11 +345,17 @@ class Session:
                 if items:
                     await self._run_modeller(items)
                     self.meaningful_since_analysis += len(items)
+                    self.meaningful_since_consolidation += len(items)
                     if self.meaningful_since_analysis >= ANALYST_EVERY:
                         self._kick_analyst()
-            # meeting over: final analysis, then save
-            if self.analyst_task and not self.analyst_task.done():
-                await self.analyst_task
+                    self._kick_consolidator()
+            # meeting over: final cleanup (so the saved board and the analysis see it), final analysis, then save
+            for task in (self.consolidator_task, self.analyst_task):
+                if task and not task.done():
+                    await task
+            self._kick_consolidator(force=True)
+            if self.consolidator_task and not self.consolidator_task.done():
+                await self.consolidator_task
             self._kick_analyst(force=True)
             if self.analyst_task:
                 await self.analyst_task
@@ -461,6 +472,66 @@ class Session:
         except Exception:
             log.exception("analyst crashed")
 
+    def _kick_consolidator(self, force: bool = False) -> None:
+        if CONSOLIDATE_EVERY <= 0 or (self.consolidator_task and not self.consolidator_task.done()):
+            return  # disabled, or one at a time; the next trigger catches up
+        if not force and self.meaningful_since_consolidation < CONSOLIDATE_EVERY:
+            return
+        self.meaningful_since_consolidation = 0
+        self.consolidator_task = asyncio.create_task(self._run_consolidator())
+
+    def _consolidator_guard(self, ops: list) -> tuple[list, list]:
+        """Drop ops the consolidator may not emit: tab changes, undo, and anything touching a dispute."""
+        b = self.board.boards.get(self.board.active) or {"nodes": {}, "edges": {}}
+        def disputed(ref: Any) -> bool:
+            item = b["nodes"].get(ref) or b["edges"].get(ref)
+            return bool(item) and item["status"] in ("disputed", "resolved")
+        kept, rejected = [], []
+        for op in ops:
+            name = op.get("op") if isinstance(op, dict) else None
+            if name in CONSOLIDATOR_BLOCKED:
+                rejected.append({"op": op, "error": f"{name}: not allowed for the consolidator"})
+            elif name == "mark" and op.get("status") in ("disputed", "resolved"):
+                rejected.append({"op": op, "error": "mark: the consolidator never opens or closes disputes"})
+            elif name in ("mark", "remove_node", "update_node", "disconnect", "reroute") and disputed(
+                    op.get("target") or op.get("id") or op.get("edge")):
+                rejected.append({"op": op, "error": f"{name}: element is disputed/resolved; left alone"})
+            else:
+                kept.append(op)
+        return kept, rejected
+
+    async def _run_consolidator(self) -> None:
+        try:
+            transcript = [u for u in self.spoken if self.extractions.get(u["id"], {}).get("kind") != "chit_chat"]
+            if not transcript or not self.board.active:
+                return
+            res = await agents.consolidate(self.meeting, transcript, self.board.compact())
+            ops = [op for op in (res.data or {}).get("ops", []) if isinstance(op, dict)]
+            by_lookup = {u["id"]: u["speaker"] for u in self.spoken}
+            for op in ops:
+                if op.get("src") not in by_lookup:
+                    op["src"] = transcript[-1]["id"]
+            # The modeller may have changed the board meanwhile; ops on elements that are gone are rejected per op.
+            ops, guard_rejected = self._consolidator_guard(ops)
+            result = self.board.apply_ops(ops, by_lookup=by_lookup)
+            result["rejected"] = guard_rejected + result["rejected"]
+            summary = (res.data or {}).get("summary") or ("consolidator error" if res.error else "")
+            await self._emit_board(result, "consolidator")
+            await self.emit({"type": "activity", "item": {
+                "agent": "consolidator", "utts": [transcript[-1]["id"]], "latency_ms": res.latency_ms,
+                "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "error": res.error,
+                "tokens": [res.tokens_in, res.tokens_out], "t": round(time.perf_counter() - self.t0, 2)}})
+            log.info("consolidator %5dms ops=%d rejected=%d | %s", res.latency_ms, len(result["applied"]),
+                     len(result["rejected"]), summary)
+            for op in result["applied"]:
+                log.info("    + %s", json.dumps({k: v for k, v in op.items() if v is not None}, ensure_ascii=False))
+            for rej in result["rejected"]:
+                log.info("    x %s  <- %s", rej["error"], json.dumps(rej["op"], ensure_ascii=False)[:200])
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.exception("consolidator crashed")
+
     # ------------------------------------------------------------------ save
     def _save_run(self, complete: bool) -> None:
         if not self.timeline:
@@ -479,8 +550,10 @@ class Session:
             "meta": {"title": self.meeting["title"], "model": agents.MODEL,
                      "source": self.meeting.get("source", "scripted"),
                      "efforts": {"extractor": agents.EXTRACTOR_EFFORT, "modeller": agents.MODELLER_EFFORT,
-                                 "analyst": agents.ANALYST_EFFORT},
+                                 "analyst": agents.ANALYST_EFFORT, "consolidator": agents.CONSOLIDATOR_EFFORT},
                      "modeller": {"model": agents.MODELLER_MODEL, "thinking": agents.MODELLER_THINKING},
+                     "consolidator": {"model": agents.CONSOLIDATOR_MODEL, "thinking": agents.CONSOLIDATOR_THINKING,
+                                      "every": CONSOLIDATE_EVERY},
                      "extractor": {"backend": agents.EXTRACTOR_BACKEND,
                                    "model": agents.JEV_MODEL if agents.EXTRACTOR_BACKEND == "jev" else agents.EXTRACTOR_MODEL,
                                    "thinking": agents.EXTRACTOR_THINKING},

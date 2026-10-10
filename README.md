@@ -5,7 +5,8 @@ As people talk in a meeting, their words become an animated diagram that redraws
 This POC simulates a 4-person brainstorm (a mock transcript, no audio and no meeting bot), and it has a
 **🎙 Talk live** mode where you speak into your microphone and the board builds from what you say (see [Talk live](#talk-live-microphone-mode)). Both drive a real
 agent pipeline on Anthropic `claude-sonnet-5-5` (effort `low`): **extractor → board modeller → typed ops → versioned board → animated renderer**,
-with a background **analyst** that keeps the open-questions and disagreements lists.
+with a background **analyst** that keeps the open-questions and disagreements lists, and a background **consolidator** that
+periodically cleans up the modeller's incremental mistakes (duplicates, placeholders, hub edges instead of groups, loose nodes).
 
 ## Run it
 
@@ -40,12 +41,18 @@ curl -XPOST localhost:8010/api/control -d '{"cmd":"start","mode":"live","speed":
 ```
 
 Optional env vars: `LW_MODEL` (default `claude-sonnet-5-5`), `LW_EXTRACTOR_EFFORT` (`low`), `LW_MODELLER_EFFORT` (`low`),
-`LW_ANALYST_EFFORT` (`low`). `LW_MODELLER_MODEL` / `LW_EXTRACTOR_MODEL` (default `LW_MODEL`) and `LW_MODELLER_THINKING` / `LW_EXTRACTOR_THINKING` (`adaptive`; `disabled` on Haiku, `between_tools` on Sonnet) tune each agent alone. `LW_EXTRACTOR_BACKEND=jev` swaps the extractor to TypeSafe Jev (key in `.env` as `JEV_API_KEY`, model `LW_JEV_MODEL`, default `jev-latest`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
+`LW_ANALYST_EFFORT` (`low`). Consolidator: `LW_CONSOLIDATOR_MODEL` (default `LW_MODEL`), `LW_CONSOLIDATOR_EFFORT` (`medium`),
+`LW_CONSOLIDATOR_THINKING` (`adaptive`), `LW_CONSOLIDATE_EVERY` (`6` meaningful utterances; `0` disables it). `LW_MODELLER_MODEL` / `LW_EXTRACTOR_MODEL` (default `LW_MODEL`) and `LW_MODELLER_THINKING` / `LW_EXTRACTOR_THINKING` (`adaptive`; `disabled` on Haiku, `between_tools` on Sonnet) tune each agent alone. `LW_EXTRACTOR_BACKEND=jev` swaps the extractor to TypeSafe Jev (key in `.env` as `JEV_API_KEY`, model `LW_JEV_MODEL`, default `jev-latest`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
 (`local`/`server`, default picked from the model), `LW_VAD_SILENCE_MS` (`700`), `LW_VAD_MIN_RMS` (`220`),
 `LW_STT_NOISE_REDUCTION` (`far_field`, `near_field` or `none`), `LW_STT_LANGUAGE` (`en`).
 
-Fastest setup measured on the mock meeting (~2.1 s utterance to board ops vs ~4.4 s default, same score):
-`LW_EXTRACTOR_BACKEND=jev LW_MODELLER_MODEL=claude-haiku-5-5 LW_MODELLER_THINKING=disabled uv run uvicorn server:app --port 8010`
+Recommended setup (Jev extractor, modeller on the default Sonnet with adaptive thinking):
+`LW_EXTRACTOR_BACKEND=jev uv run uvicorn server:app --port 8010`
+
+Fastest setup measured on the mock meeting (~2.1 s utterance to board ops vs ~4.4 s default, same score on the clean
+scripted meeting): additionally `LW_MODELLER_MODEL=claude-haiku-5-5 LW_MODELLER_THINKING=disabled`. Avoid it for talk
+live: on fragmented live speech Haiku without thinking leaves placeholder nodes and duplicates behind (compare
+`runs/2026-10-10T09-26-01.json`, where Sonnet on the same transcript built a clean, connected board at the same latency).
 
 ## Architecture
 
@@ -65,8 +72,11 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
                                        ▼
                      BoardState  (single source of truth: versioned, validated, undo via inverse primitives)
                        │                       ▲
-                       │                       └─ Analyst (async, every 4 meaningful utterances, never blocks):
-                       │                          open questions, disagreements, dispute-mark fixes (stale-guarded)
+                       │                       ├─ Analyst (async, every 4 meaningful utterances, never blocks):
+                       │                       │  open questions, disagreements, dispute-mark fixes (stale-guarded)
+                       │                       └─ Consolidator (async, every 6 meaningful utterances + once at the end,
+                       │                          before the final analysis): full transcript + full active board →
+                       │                          small cleanup diff (merge duplicates/placeholders, groups, connect loose nodes)
                        ▼
                      WebSocket ─► browser renderer (SVG + rough.js, stable incremental layout, animations)
                        │
@@ -76,18 +86,18 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
 | File | Role |
 |---|---|
 | `server.py` | FastAPI app: static files, `/ws` WebSocket (push + commands), `/ws/mic` (talk-live audio in), `/api/state`, `/api/runs`, `/api/control` |
-| `whiteboard/session.py` | Pipeline: `submit_utterance()`, extractor fan-out, ordered/batched modeller worker, analyst scheduling, recording, replay |
+| `whiteboard/session.py` | Pipeline: `submit_utterance()`, extractor fan-out, ordered/batched modeller worker, analyst and consolidator scheduling, recording, replay |
 | `whiteboard/sources.py` | Pluggable utterance sources: `ScriptedSource` (mock meeting on the virtual clock) and `MicSource` (live speech) |
 | `whiteboard/stt.py` | OpenAI Realtime transcription client (raw WebSocket, key stays on the server) |
 | `whiteboard/audio.py` | PCM16 helpers, streaming resampler, adaptive energy VAD |
-| `whiteboard/agents.py` | The three agents: prompts, structured-output JSON schemas, the Anthropic call wrapper |
+| `whiteboard/agents.py` | The agents (extractor, modeller, analyst, consolidator): prompts, structured-output JSON schemas, the Anthropic call wrapper |
 | `whiteboard/board.py` | Op schema, validation, application, versioning, transactions, undo |
 | `static/board.js` | Renderer: shapes per node type, statuses, speaker-coloured highlights, stable layout, camera |
 | `static/app.js`, `static/index.html`, `static/style.css` | Meeting panel, tabs, agent activity feed, lists, controls, talk-live panel |
 | `static/mic.js`, `static/pcm-worklet.js` | Mic capture: getUserMedia → AudioWorklet (resample to 24 kHz, PCM16) → `/ws/mic` |
 | `scripts/feed_audio.py`, `scripts/make_test_audio.py`, `data/test_audio/` | Talk-live test harness: TTS monologue streamed through `/ws/mic` |
 | `data/meeting_freshbite.json` | Mock meeting: 43 utterances, 4 roles (client PO, architect, backend dev, UX) |
-| `tests/test_board.py`, `tests/test_audio.py`, `tests/test_sources.py` | Pytest: ops; PCM/resampler (incl. the browser worklet run in Node)/VAD; sources with faked agents and transcriber |
+| `tests/test_board.py`, `tests/test_audio.py`, `tests/test_sources.py`, `tests/test_consolidator.py`, `tests/test_agents.py` | Pytest: ops; PCM/resampler (incl. the browser worklet run in Node)/VAD; sources with faked agents and transcriber; consolidator trigger and guards; agent schemas/prompts |
 | `runs/` | Recorded runs (the newest complete one is the replay fallback) |
 
 ### The board model (the contract)
@@ -97,6 +107,13 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
 - Every mutation goes through primitives that record their inverse. Ops are grouped into one transaction per source utterance,
   so `{"op":"undo","target_src":"u19"}` reverts exactly what u19 did. It also works when later utterances changed other things, and it drops edges left dangling.
 - Deterministic dispute lifecycle: an element can only leave `disputed` by becoming `resolved`, and `resolved` only exists for elements that were actually disputed.
+- The **consolidator** fixes what the one-utterance-at-a-time modeller cannot see: a placeholder ("Agent one") next to the
+  named node ("Extractor") is merged into one, "X consists of N parts" becomes a group instead of hub edges, and loose nodes
+  are connected only when the transcript supports it (inferred relations as `ghost`). It uses the modeller's op vocabulary, but the
+  server drops its `new_board`/`switch_board`/`undo` ops and anything that opens, closes or edits a dispute. It runs in the
+  background, so the modeller may change the board meanwhile; ops on elements that are gone are rejected one by one.
+- A `connect`/`reroute` endpoint that is a board (tab) id instead of a node (`live_whiteboard_architecture`) is mapped to the node
+  it names (`live_whiteboard`, suffixes like `_architecture`, `_flow`, `_map` stripped) or rejected with a clear error.
 - One `board` event per applied batch carries the full state. Boards are small, which keeps the renderer and replay simple.
 
 ### Renderer

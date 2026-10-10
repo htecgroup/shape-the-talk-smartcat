@@ -46,12 +46,17 @@ def fake_pipeline(monkeypatch, tmp_path):
     async def analyse(*a, **k):
         return CallResult({"open_questions": [], "disagreements": [], "suggested_marks": []}, 1)
 
+    async def consolidate(meeting, transcript, compact):
+        calls.setdefault("consolidate", []).append(transcript[-1]["id"])
+        return CallResult({"summary": "No cleanup needed", "ops": []}, 1)
+
     async def warmup():
         return None
 
     monkeypatch.setattr(agents, "extract", extract)
     monkeypatch.setattr(agents, "model", model)
     monkeypatch.setattr(agents, "analyse", analyse)
+    monkeypatch.setattr(agents, "consolidate", consolidate)
     monkeypatch.setattr(agents, "warmup", warmup)
     monkeypatch.setattr(session_mod, "RUNS_DIR", tmp_path)
     return calls
