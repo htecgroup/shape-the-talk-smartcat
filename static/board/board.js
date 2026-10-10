@@ -21,6 +21,7 @@ const Board = (() => {
   let svg, camera, groupsLayer, edgesLayer, nodesLayer, fxLayer, container, rc, tooltip;
   let colorOf = () => "#868e96";
   let onEmptyChange = () => {};
+  let layoutSig = () => "";    // what a board's layout depends on (nodes, groups, edges, plan)
 
   const pos = new Map();       // "board:node" -> target {x, y}
   const cur = new Map();       // "board:node" -> drawn {x, y}
@@ -35,6 +36,7 @@ const Board = (() => {
   const tweens = new Map();    // "board:node" -> {x, y, t0}: eased move after a re-layout
   const stale = new Set();     // board ids waiting for a full re-layout
   const routes = new Map();    // "board:edge" -> {pts, a, b}: waypoints from the last tidy
+  const laidOut = new Map();   // board id -> layoutSig at its last full re-layout
   const TWEEN_MS = 560;
   let camTween = null;
 
@@ -50,6 +52,7 @@ const Board = (() => {
     tooltip = document.getElementById("tooltip");
     colorOf = opts.colorOf || colorOf;
     onEmptyChange = opts.onEmptyChange || onEmptyChange;
+    layoutSig = opts.layoutSig || layoutSig;
     rc = window.rough ? rough.svg(svg) : null;
     setupPanZoom();
     window.addEventListener("resize", () => { if (autoFit) fit(); });
@@ -98,6 +101,7 @@ const Board = (() => {
   function tidy(board = shownData) {
     if (!board || board.id !== shown) return;
     const next = layoutBoard(board);
+    laidOut.set(board.id, layoutSig(board));
     const now = performance.now();
     for (const [id, p] of next.pos) {
       const k = key(shown, id), c = cur.get(k);
@@ -117,6 +121,8 @@ const Board = (() => {
 
   /* Ask for a full re-layout of these boards: right away if shown, otherwise when next shown. */
   function relayout(ids) { for (const id of ids) stale.add(id); }
+  /* The same, but only for boards that changed since their last full re-layout here (or never had one). */
+  function relayoutChanged(boards) { relayout(boards.filter((b) => laidOut.get(b.id) !== layoutSig(b)).map((b) => b.id)); }
 
   // ------------------------------------------------------------ edges
   function geom(id) {
@@ -366,7 +372,7 @@ const Board = (() => {
   }
   function hideTip() { tooltip.hidden = true; }
 
-  function reset() { clearAll(); pos.clear(); cur.clear(); lastSeen.clear(); stale.clear(); routes.clear(); clearRouteCache(); shown = null; shownData = null; autoFit = true; onEmptyChange(true); }
+  function reset() { clearAll(); pos.clear(); cur.clear(); lastSeen.clear(); stale.clear(); laidOut.clear(); routes.clear(); clearRouteCache(); shown = null; shownData = null; autoFit = true; onEmptyChange(true); }
 
-  return { init, render, tidy: () => tidy(), relayout, fit: setAutoFit, reset, get shown() { return shown; } };
+  return { init, render, tidy: () => tidy(), relayout, relayoutChanged, fit: setAutoFit, reset, get shown() { return shown; } };
 })();

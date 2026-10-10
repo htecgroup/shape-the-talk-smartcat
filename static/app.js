@@ -18,7 +18,10 @@
   const colorOf = (name) => S.colors[name] || "#868e96";
   const initials = (n) => n.split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 
-  Board.init({ colorOf, onEmptyChange: (empty) => $("boardEmpty").classList.toggle("hide", !empty) });
+  Board.init({
+    colorOf, onEmptyChange: (empty) => $("boardEmpty").classList.toggle("hide", !empty),
+    layoutSig: (b) => `${shapeSig(b)}|${planSig(b)}`,   // the board's shape and plan, as far as Tidy uses them
+  });
 
   // ------------------------------------------------------------------ socket
   function connect() {
@@ -228,10 +231,11 @@
     Board.render(b, { version: ev.version, by: lastOp && lastOp.by, silent: ev.silent });
   }
 
-  // meeting end: one full re-layout of every board (the shown one now, the others when shown), so nodes added
-  // after the last plan change follow the plan too
+  // meeting end: one full re-layout of every board that changed since its last layout in this browser (the shown
+  // one now, the others when shown), so nodes added after the last plan change follow the plan too; a board that
+  // didn't change keeps the layout it has
   function onRelayout(ids = []) {
-    Board.relayout(ids);
+    Board.relayoutChanged(((S.board && S.board.boards) || []).filter((b) => ids.includes(b.id)));
     const b = S.board && S.board.boards.find((x) => x.id === S.viewBoard);
     if (b) Board.render(b, { silent: true });
   }

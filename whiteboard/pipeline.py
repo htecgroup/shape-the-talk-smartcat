@@ -22,7 +22,7 @@ log = logging.getLogger("session")
 MAX_BATCH = 6               # max utterances per modeller call when a backlog builds
 ANALYST_EVERY = 4           # meaningful utterances between analyst runs
 WINDOW = 8                  # previous meaningful utterances shown to the modeller
-CONSOLIDATE_EVERY = int(os.getenv("LW_CONSOLIDATE_EVERY", "6"))  # meaningful utterances between cleanup passes; 0 = off
+CONSOLIDATE_EVERY = int(os.getenv("LW_CONSOLIDATE_EVERY", "4"))  # meaningful utterances between cleanup passes; 0 = off
 CONSOLIDATOR_BLOCKED = {"new_board", "switch_board", "undo"}     # the consolidator only edits the active board
 
 

@@ -59,7 +59,7 @@ Board Modeller   compact board JSON + recent transcript → typed ops
       ▼
 BoardState       single source of truth: validated, versioned, undo per utterance
       ▲   ├─ Analyst       background, every 4 utterances: open questions, disagreements, closes stale disputes
-      │   └─ Consolidator  background, every 6 utterances, on the board a topic shift leaves, and at the end on
+      │   └─ Consolidator  background, every 4 utterances, on the board a topic shift leaves, and at the end on
       │                    every changed board: merges duplicates and placeholders, groups parts, connects
       │                    loose nodes, folds technology/attribute nodes into notes, drops meta nodes
       │                    (cleanup ops, never touches disputes or tabs)
@@ -78,8 +78,10 @@ is mapped to the node it names or rejected.
 proposals are dashed, `disputed` elements get a red outline and ❗ badge, `resolved` a ✓. Changes glow in the speaker's
 colour. New nodes are placed next to what they connect to and existing nodes never move. ✨ Tidy re-lays out the
 whole board (flow order, groups together, long flows wrapped to fit the panel, edges routed round nodes) when you click
-it, automatically after the consolidator restructured the board or changed its layout plan, and once for every
-board when the meeting ends (a recorded `relayout` event, so Replay does it too). With a plan, the
+it, automatically after the consolidator restructured the board or changed its layout plan, and when the meeting
+ends for every board that changed since its last layout in that browser (a recorded `relayout` event, so Replay does
+it too; a board that didn't change keeps its layout). Wrapped rows snake: they alternate left-to-right and
+right-to-left, and a group in a right-to-left row is mirrored so the flow enters at its first member. With a plan, the
 story's spine sets the flow order (and where it wraps), side nodes go where the plan puts them, and TB boards run top
 to bottom; without one (or for ids it doesn't know) Tidy falls back to the graph structure.
 

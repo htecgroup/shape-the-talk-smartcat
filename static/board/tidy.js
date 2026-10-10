@@ -267,10 +267,10 @@ const BoardTidy = (() => {
     }
 
     // 6. y inside each band, x by column; bands alternate left-to-right and
-    //    right-to-left, except that a band of one column reads left-to-right
-    //    (its group runs the reading way) and the next one starts over
-    const bdir = [];
-    bands.forEach((rs, b) => bdir.push(rs.length === 1 || !b || bands[b - 1].length === 1 ? 1 : -bdir[b - 1]));
+    //    right-to-left (a snake), however many columns they hold. A group in a
+    //    right-to-left band is mirrored inside (layoutBoard), so its first member
+    //    sits where the flow comes in and its last one where it goes on.
+    const bdir = bands.map((_, b) => (b % 2 ? -1 : 1));
     const y = new Map(), pos = new Map(), dpos = new Map();
     // x: each band starts right under the end of the previous one, so the flow
     // turns straight down; it is nudged back inside the width used so far
