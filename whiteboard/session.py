@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agents
+from .approvals import DEFAULT_APPROVAL_MODE, ApprovalGate
 from .board import BoardState
 from .pipeline import AgentPipeline
 from .recording import list_runs, resolve_run, save_run
@@ -65,10 +66,11 @@ class Clock:
             remaining -= step * self.speed
 
 
-class Session(AgentPipeline):
+class Session(AgentPipeline, ApprovalGate):
     def __init__(self) -> None:
         self.clients: set[Any] = set()
         self.meeting = load_meeting()
+        self.approval_mode = DEFAULT_APPROVAL_MODE   # a room setting: survives Reset
         self._tasks: list[asyncio.Task] = []
         self._reset_state()
 
@@ -90,10 +92,14 @@ class Session(AgentPipeline):
         self.consolidated: dict[str, str] = {}   # board id -> its shape after the last cleanup pass
         self.questions: list[dict] = []
         self.disagreements: list[dict] = []
+        self.approvals: list[dict] = []            # destructive ops waiting for a person (ask mode)
+        self._approval_seq = 0
+        self.kept_by_person: set[tuple] = set()    # (board, node, "remove_node") / (board, nodes, "merge") a person kept
         # client snapshot view (built from emitted events, works for live and replay)
         self.view_transcript: list[dict] = []
         self.view_activity: list[dict] = []
         self.view_board: dict = self.board.to_dict()
+        self.view_approvals: list[dict] = []
         self.timeline: list[dict] = []
         self.t0 = time.perf_counter()
         self.run_file: str | None = None
@@ -109,6 +115,7 @@ class Session(AgentPipeline):
             "questions": self.questions, "disagreements": self.disagreements,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
             "mic": self.source.public_state() if self.source else None,
+            "approval_mode": self.approval_mode, "approvals": self.view_approvals,
         }
 
     def _meeting_public(self) -> dict:
@@ -163,6 +170,8 @@ class Session(AgentPipeline):
         elif t == "analysis":
             self.questions = ev["questions"]
             self.disagreements = ev["disagreements"]
+        elif t == "approvals":
+            self.view_approvals = ev["pending"]
         elif t == "status":
             self.status = ev["status"]
 
@@ -214,12 +223,17 @@ class Session(AgentPipeline):
         self.source.rearm()                 # same source, so utterance ids keep counting (m001, m002, ...)
         self.speech_done = False
         self.pending_event = asyncio.Event()
-        self.t0 = time.perf_counter() - (self.timeline[-1]["t"] if self.timeline else 0.0)  # no idle gap in replay
+        self._close_idle_gap()
         self.status = "running"
         self._tasks = [asyncio.create_task(self._run_source(announce=False)),
                        asyncio.create_task(self._modeller_worker())]
         await self.emit_status()
         return {"ok": True, "mode": self.mode}
+
+    def _close_idle_gap(self) -> None:
+        """Pick the clock up where the recorded timeline stopped, so replay does not sit through the idle
+        time after the meeting ended (talk live continued, an approval decided later)."""
+        self.t0 = time.perf_counter() - (self.timeline[-1]["t"] if self.timeline else 0.0)
 
     async def pause(self) -> None:
         if self.status == "running" and self.mode != "mic":   # you cannot pause someone talking

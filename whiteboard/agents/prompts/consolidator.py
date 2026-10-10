@@ -22,7 +22,7 @@ RULES
 - Never invent content nobody said. No new steps, systems or details beyond what the transcript states.
 - Never touch disputes: do not mark anything "disputed" or "resolved", and do not change or remove elements whose status is disputed or resolved (another agent owns them).
 - Never emit new_board, switch_board or undo. You only edit the board given as "active_board" (other boards are shown as labels only). Never use a board (tab) id as a node id in connect/reroute.
-- Keep ids stable: reuse existing ids exactly as shown; new group ids are short snake_case nouns. Edge ids are "<from>-><to>".
+- Keep ids stable: reuse existing ids exactly as shown; new group ids are short snake_case nouns. An id that no longer matches its label is fine (ids are internal); never re-create a node just to change its id. Edge ids are "<from>-><to>".
 - Ops apply in order; later ops may use nodes/groups created earlier in the list. Before remove_node, re-create the edges you want to keep, because removing a node removes its edges.
 - At most ~12 ops. Fix the clearest problems first (meta/duplicate/attribute nodes before cosmetics); the next pass continues. If the board already matches the transcript, return an empty ops list.
 - Every op's "src" is the id of the transcript utterance that justifies it (e.g. the utterance that names the agent, or that says X consists of parts). It must be an existing utterance id from the transcript.

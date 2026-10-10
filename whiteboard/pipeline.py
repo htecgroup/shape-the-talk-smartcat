@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from . import agents
+from .board import slug
 
 log = logging.getLogger("session")
 
@@ -137,10 +138,14 @@ class AgentPipeline:
             if isinstance(op, dict) and op.get("src") not in by_lookup:
                 op["src"] = last_id
         ops, guard_rejected = self._modeller_guard(ops, items)
+        seq = self._approval_seq
+        ops, held, refused = self._hold_destructive(ops, "modeller")
         result = self.board.apply_ops(ops, by_lookup=by_lookup)
-        result["rejected"] = guard_rejected + result["rejected"]
+        result["rejected"] = guard_rejected + refused + result["rejected"]
         summary = (res.data or {}).get("summary") or ("modeller error" if res.error else "")
         await self._emit_board(result, "modeller")
+        if self._approval_seq != seq:   # a new proposal (a repeated one is already listed)
+            await self._emit_approvals()
         if result["applied"]:
             now = round(time.perf_counter() - self.t0, 3)
             for uid in batch_ids:
@@ -149,12 +154,12 @@ class AgentPipeline:
         await self.emit({"type": "activity", "item": {
             "agent": "modeller", "utts": [i["utt"]["id"] for i in items],
             "speaker": items[-1]["utt"]["speaker"], "latency_ms": res.latency_ms,
-            "summary": summary, "ops": result["applied"], "rejected": result["rejected"],
+            "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "held": held,
             "error": res.error, "batched": len(items), "version": self.board.version,
             "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}})
         log.info("model %s %5dms ops=%d rejected=%d | %s", ",".join(sorted(batch_ids)), res.latency_ms,
                  len(result["applied"]), len(result["rejected"]), summary)
-        _log_ops(result)
+        _log_ops(result, held)
 
     def _modeller_guard(self, ops: list, items: list[dict]) -> tuple[list, list]:
         """Only open a new tab when the extractor saw an explicit topic shift (or when there is no board yet).
@@ -183,6 +188,8 @@ class AgentPipeline:
         if layout is not None:
             ev["layout"] = {"board": layout["board"], **layout["plan"]}
         await self.emit(ev)
+        if self._prune_approvals():
+            await self._emit_approvals()
 
     # -------------------------------------------------------------- analyst
     def _kick_analyst(self, force: bool = False) -> None:
@@ -260,10 +267,41 @@ class AgentPipeline:
         def disputed(ref: Any) -> bool:
             item = b["nodes"].get(ref) or b["edges"].get(ref)
             return bool(item) and item["status"] in ("disputed", "resolved")
+        # A re-created node (same label as an existing one) is an id rename, not a cleanup: it moves the node and,
+        # in ask-first mode, leaves the copy on the board while the original's removal waits. Drop both halves.
+        by_label: dict[str, list[str]] = {}
+        for nid, n in b["nodes"].items():
+            by_label.setdefault(_label_key(n["label"]), []).append(nid)
+        renamed = {_sid(op.get("id")): by_label[_label_key(op.get("label"))] for op in ops
+                   if isinstance(op, dict) and op.get("op") == "add_node" and op.get("id")
+                   and _sid(op.get("id")) not in b["nodes"] and _label_key(op.get("label")) in by_label}
+        # The other half of such a merge never applies alone either: every node of that label, and every node whose
+        # edges the batch re-points to the re-created node (connect/reroute to a neighbour it shares).
+        doomed = {old for olds in renamed.values() for old in olds}
+        if renamed:
+            moved = set()   # neighbours the batch connects to a re-created node
+            for op in ops:
+                if not isinstance(op, dict) or op.get("op") not in ("connect", "reroute"):
+                    continue
+                ends = {_sid(op.get(k)) for k in ("from", "to", "via", "new_from", "new_to")}
+                ends |= {_sid(x) for x in str(op.get("edge") or "").split("->")}
+                if ends & renamed.keys():
+                    moved |= ends - renamed.keys()
+            doomed |= {e["from"] if e["to"] in moved else e["to"] for e in b["edges"].values()
+                       if e["from"] in moved or e["to"] in moved}
+            doomed &= {_sid(op.get("id")) for op in ops if isinstance(op, dict) and op.get("op") == "remove_node"}
         kept, rejected = [], []
         for op in ops:
             name = op.get("op") if isinstance(op, dict) else None
-            if name in CONSOLIDATOR_BLOCKED:
+            if name == "add_node" and _sid(op.get("id")) in renamed:
+                rejected.append({"op": op, "error": f"add_node: duplicates existing node "
+                                                    f"{renamed[_sid(op['id'])][0]!r}; ids stay stable"})
+            elif name == "connect" and renamed.keys() & {_sid(op.get("from")), _sid(op.get("to"))}:
+                rejected.append({"op": op, "error": "connect: to a re-created node; ids stay stable"})
+            elif name == "remove_node" and _sid(op.get("id")) in doomed:
+                rejected.append({"op": op, "error": f"remove_node: {op['id']!r} was re-created under a new id; "
+                                                    "ids stay stable"})
+            elif name in CONSOLIDATOR_BLOCKED:
                 rejected.append({"op": op, "error": f"{name}: not allowed for the consolidator"})
             elif name == "mark" and op.get("status") in ("disputed", "resolved"):
                 rejected.append({"op": op, "error": "mark: the consolidator never opens or closes disputes"})
@@ -293,22 +331,26 @@ class AgentPipeline:
                     op["src"] = transcript[-1]["id"]
             # The modeller may have changed the board meanwhile; ops on elements that are gone are rejected per op.
             ops, guard_rejected = self._consolidator_guard(ops, bid)
+            seq = self._approval_seq
+            ops, held, refused = self._hold_destructive(ops, "consolidator")
             result = self.board.apply_ops(ops, by_lookup=by_lookup)
-            result["rejected"] = guard_rejected + result["rejected"]
+            result["rejected"] = guard_rejected + refused + result["rejected"]
             summary = (res.data or {}).get("summary") or ("consolidator error" if res.error else "")
             # layout plan: validated against the board after the ops (it may use a group the ops just added)
             changed = self.board.set_layout(bid, (res.data or {}).get("layout")) if hints else None
             self.consolidated[bid] = _shape(self.board.boards[bid])
             await self._emit_board(result, "consolidator", {"board": bid, "plan": changed} if changed else None)
+            if self._approval_seq != seq:
+                await self._emit_approvals()
             item = {"agent": "consolidator", "utts": [transcript[-1]["id"]], "board": bid, "latency_ms": res.latency_ms,
-                    "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "error": res.error,
-                    "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}
+                    "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "held": held,
+                    "error": res.error, "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}
             if hints and self.board.layout_of(bid):
                 item["layout"] = {"board": bid, "changed": changed is not None, **self.board.layout_of(bid)}
             await self.emit({"type": "activity", "item": item})
             log.info("consolidator %5dms ops=%d rejected=%d layout=%s | %s", res.latency_ms, len(result["applied"]),
                      len(result["rejected"]), _plan_line(self.board.layout_of(bid)) if hints else "off", summary)
-            _log_ops(result)
+            _log_ops(result, held)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -340,8 +382,19 @@ def _plan_line(plan: dict | None) -> str:
     return f'{plan["direction"]} {" > ".join(plan["spine"]) or "-"}' + (f" [{places}]" if places else "")
 
 
-def _log_ops(result: dict) -> None:
+def _sid(value: object) -> str:
+    """An op's node id as the board will store it ("" when missing)."""
+    return slug(value) if value else ""
+
+
+def _label_key(label: object) -> str:
+    return " ".join(str(label or "").lower().split())
+
+
+def _log_ops(result: dict, held: list | None = None) -> None:
     for op in result["applied"]:
         log.info("    + %s", json.dumps({k: v for k, v in op.items() if v is not None}, ensure_ascii=False))
+    for op in held or []:
+        log.info("    ? %s  <- awaiting approval", json.dumps({k: v for k, v in op.items() if v is not None}, ensure_ascii=False))
     for rej in result["rejected"]:
         log.info("    x %s  <- %s", rej["error"], json.dumps(rej["op"], ensure_ascii=False)[:200])

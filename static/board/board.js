@@ -37,6 +37,7 @@ const Board = (() => {
   const stale = new Set();     // board ids waiting for a full re-layout
   const routes = new Map();    // "board:edge" -> {pts, a, b}: waypoints from the last tidy
   const laidOut = new Map();   // board id -> layoutSig at its last full re-layout
+  let pending = new Set();     // "board:node" keys of nodes whose removal waits for approval
   const TWEEN_MS = 560;
   let camTween = null;
 
@@ -201,7 +202,8 @@ const Board = (() => {
       ne.data = n;
       // keep transient animation classes (enter/flash); only swap type and status
       const transient = ["enter", "flash"].filter((c) => ne.g.classList.contains(c));
-      ne.g.setAttribute("class", ["node", n.type, n.status, ...transient].join(" "));
+      ne.g.setAttribute("class", ["node", n.type, n.status, ...transient,
+        ...(pending.has(key(board.id, id)) ? ["pending-remove"] : [])].join(" "));
       const prevN = prev && prev.nodes[id];
       if (!silent && (!prevN || prevN.v !== n.v || nodeSig(prevN) !== nodeSig(n))) flash(ne, flashColor(n));
     }
@@ -372,7 +374,13 @@ const Board = (() => {
   }
   function hideTip() { tooltip.hidden = true; }
 
+  /* Nodes waiting for a removal approval: [{board, targets}] (a merge removes several). They stay drawn, dimmed and struck through. */
+  function setPending(items) {
+    pending = new Set(items.flatMap((p) => (p.targets || [p.target]).map((t) => key(p.board, t))));
+    for (const [id, ne] of nodeEls) ne.g.classList.toggle("pending-remove", pending.has(key(shown, id)));
+  }
+
   function reset() { clearAll(); pos.clear(); cur.clear(); lastSeen.clear(); stale.clear(); laidOut.clear(); routes.clear(); clearRouteCache(); shown = null; shownData = null; autoFit = true; onEmptyChange(true); }
 
-  return { init, render, tidy: () => tidy(), relayout, relayoutChanged, fit: setAutoFit, reset, get shown() { return shown; } };
+  return { init, render, tidy: () => tidy(), relayout, relayoutChanged, fit: setAutoFit, reset, setPending, get shown() { return shown; } };
 })();

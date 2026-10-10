@@ -22,6 +22,14 @@ Open http://localhost:8010 and pick a mode. `http://localhost:8010/?replay=lates
 Controls: mode toggle, Start, Pause/Resume (space), speed 1×/2×/4×, Reset, run picker, board tabs, ✨ Tidy, ⤢ Fit,
 drag/scroll to pan and zoom. Hover a node for its note, status and who changed it.
 
+**Agent edits** (board toolbar): **⚡ Autopilot** lets the agents edit the whole board freely. **✋ Ask first** still
+applies additions and changes right away, but holds every node removal (modeller or consolidator) until someone clicks
+Remove or Keep on the card in the board's corner. Until then the node stays on the board, dimmed and struck through. A
+consolidator merge (a new node that replaces old ones) is held whole as one Merge card, so the board never shows both.
+Switching back to Autopilot applies what is still waiting. The
+mode is a room setting (survives Reset; start value `LW_APPROVAL_MODE`). Which ops need approval is the `DESTRUCTIVE`
+set in `whiteboard/approvals.py`.
+
 ## Configuration
 
 Every setting is listed with its default in [`.env.example`](.env.example). Shell variables override `.env`.
@@ -35,7 +43,7 @@ and still does the geometry itself. `LW_LAYOUT_HINTS=0` turns it off (graph-only
 ## Development
 
 ```bash
-uv run --group dev pytest -q tests                  # 52 tests, no network
+uv run --group dev pytest -q tests                  # 68 tests, no network
 uv run python scripts/simulate.py --speed 2         # headless simulated run: final boards + latency
 uv run python scripts/simulate.py --describe runs/<file>.json
 uv run python scripts/feed_audio.py [file.wav]      # stream a WAV into talk-live mode as if it were the mic
@@ -92,6 +100,7 @@ to bottom; without one (or for ids it doesn't know) Tidy falls back to the graph
 | `server.py` | FastAPI app: static files, `/ws` (push + commands), `/ws/mic` (audio in), `/api/state`, `/api/runs`, `/api/control` |
 | `whiteboard/session.py` | `Session`: state, snapshot, broadcasting, controls, replay |
 | `whiteboard/pipeline.py` | Agent workers: extractor fan-out, batched modeller, analyst and consolidator scheduling, op guards |
+| `whiteboard/approvals.py` | Approval modes: holds destructive ops in Ask-first mode, applies or drops them on a decision |
 | `whiteboard/recording.py` | Run files in `runs/`: list, resolve, save with settings and latency |
 | `whiteboard/board.py` | Board state: op validation, application, versioning, undo |
 | `whiteboard/sources.py`, `stt.py`, `audio.py` | Utterance sources, OpenAI realtime transcription, PCM/resampler/VAD |

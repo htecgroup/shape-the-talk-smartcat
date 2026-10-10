@@ -79,6 +79,10 @@ async def handle_command(msg: dict) -> dict:
         await s.set_speed(float(msg.get("speed", 1)))
     elif cmd == "reset":
         await s.reset()
+    elif cmd == "approval_mode":
+        return await s.set_approval_mode(msg.get("mode"))
+    elif cmd == "approval":
+        return await s.decide_approval(str(msg.get("id")), bool(msg.get("approve")))
     else:
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
     return {"ok": True}

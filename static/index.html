@@ -76,6 +76,10 @@
       <div class="board-bar">
         <div class="tabs" id="tabs"></div>
         <div class="board-tools">
+          <div class="seg tiny" id="approvalSeg" role="group" aria-label="Agent edits">
+            <button data-approval="auto" class="on" title="Autopilot: the agents edit the whole board freely">⚡ Autopilot</button>
+            <button data-approval="ask" title="Ask first: the agents add and change freely, but removing a node waits for your OK">✋ Ask first</button>
+          </div>
           <span class="legend">
             <span class="lg lg-actor">Actor</span><span class="lg lg-system">System</span><span class="lg lg-step">Step</span><span class="lg lg-decision">Decision</span><span class="lg lg-data">Data</span>
           </span>
@@ -116,6 +120,7 @@
             <div>It fills in as the meeting talks. Nothing here is drawn by hand.</div>
           </div>
         </div>
+        <div class="approvals" id="approvals" hidden></div>
         <div class="toasts" id="toasts"></div>
         <div class="tooltip" id="tooltip" hidden></div>
       </div>
