@@ -63,6 +63,8 @@
     renderLists(s.questions, s.disagreements);
     S.board = null; S.knownBoards = new Set(); S.followActive = true;
     Board.reset();
+    // a board that already has a layout plan is shown laid out by it
+    Board.relayout(((s.board && s.board.boards) || []).filter((b) => b.layout).map((b) => b.id));
     onBoard({ board: s.board, silent: true });
     if (s.mic) S.mic = s.mic; else if (s.mode !== "mic") S.mic = { state: "idle" };
     setStatus(s.status, s.mode, s.speed);
@@ -194,14 +196,25 @@
     Object.keys(b.nodes).sort().map((id) => `${id}@${b.nodes[id].group || ""}`),
     Object.values(b.edges).map((e) => `${e.from}>${e.to}`).sort(),
   ]);
+  // the layout plan, as far as it moves anything (an identical plan must not make the board jump)
+  const planSig = (b) => {
+    const L = b.layout;
+    if (!L) return "";
+    return JSON.stringify([L.direction, L.spine, (L.placements || []).map((p) => `${p.node}:${p.side}:${p.anchor}`).sort(),
+      (L.groups || []).map((g) => `${g.group}:${g.orientation}`).sort()]);
+  };
 
   function onBoard(ev) {
     const state = ev.board;
-    if (restructured(ev)) {
-      // re-lay out every board whose shape changed (the visible one now, others when shown)
-      const before = new Map(((S.board && S.board.boards) || []).map((b) => [b.id, shapeSig(b)]));
-      Board.relayout(state.boards.filter((b) => before.get(b.id) !== shapeSig(b)).map((b) => b.id));
-    }
+    const before = new Map(((S.board && S.board.boards) || []).map((b) => [b.id, b]));
+    // re-lay out every board whose shape changed after a consolidator restructuring, or whose
+    // layout plan changed (the visible one now, others when shown)
+    const stale = state.boards.filter((b) => {
+      const old = before.get(b.id);
+      if (!old) return false;
+      return (restructured(ev) && shapeSig(old) !== shapeSig(b)) || planSig(old) !== planSig(b);
+    });
+    if (stale.length) Board.relayout(stale.map((b) => b.id));
     S.board = state;
     const ids = state.boards.map((b) => b.id);
     const fresh = ids.filter((id) => !S.knownBoards.has(id));
@@ -252,6 +265,11 @@
     return esc(s) + by;
   }
 
+  function fmtPlan(L) {
+    const places = (L.placements || []).map((p) => `${p.node} ${p.side} ${p.anchor}`).join(", ");
+    return `<div class="plan${L.changed ? "" : " same"}" title="layout plan${L.changed ? "" : " (unchanged)"}">⇢ ${esc(L.direction)}: ${esc((L.spine || []).join(" → ") || "no spine")}${places ? ` · ${esc(places)}` : ""}${L.changed ? "" : " · unchanged"}</div>`;
+  }
+
   function latClass(ms) { return ms < 1600 ? "fast" : ms < 3500 ? "ok" : "slow"; }
 
   function addActivity(a, live) {
@@ -267,6 +285,7 @@
       const ops = (a.ops || []).map((o) => `<li>${fmtOp(o)}</li>`).join("");
       const rej = (a.rejected || []).map((r) => `<li class="rej" title="${esc(r.error)}">${fmtOp(r.op || {})} — ${esc(r.error)}</li>`).join("");
       body = `${a.summary ? `<div>${esc(a.summary)}</div>` : ""}${ops || rej ? `<ul class="ops">${ops}${rej}</ul>` : ""}`;
+      if (a.layout) body += fmtPlan(a.layout);
     }
     if (a.error) body += `<div class="err">${esc(a.error)}</div>`;
     div.innerHTML = `<div class="act-head"><span class="agent-tag a-${a.agent}">${a.agent}</span>

@@ -60,7 +60,7 @@ def save_run(s: Session, complete: bool) -> str | None:
                              "analyst": agents.ANALYST_EFFORT, "consolidator": agents.CONSOLIDATOR_EFFORT},
                  "modeller": {"model": agents.MODELLER_MODEL, "thinking": agents.MODELLER_THINKING},
                  "consolidator": {"model": agents.CONSOLIDATOR_MODEL, "thinking": agents.CONSOLIDATOR_THINKING,
-                                  "every": pipeline.CONSOLIDATE_EVERY},
+                                  "every": pipeline.CONSOLIDATE_EVERY, "layout_hints": agents.settings.LAYOUT_HINTS},
                  "extractor": {"backend": agents.EXTRACTOR_BACKEND,
                                "model": agents.JEV_MODEL if agents.EXTRACTOR_BACKEND == "jev" else agents.EXTRACTOR_MODEL,
                                "thinking": agents.EXTRACTOR_THINKING},

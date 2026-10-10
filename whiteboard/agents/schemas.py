@@ -83,6 +83,26 @@ MODELLER_SCHEMA = _obj({
 })
 
 
+# ==================================================== Consolidator (layout plan)
+# The plan is semantic, never coordinates: the browser's deterministic layout follows it as constraints.
+# Flat and without nullable fields for the same grammar-compiler reason as FLAT_OP; empty lists = no hint.
+LAYOUT_SIDES = ["before", "after", "above", "below"]
+LAYOUT_SCHEMA = _obj({
+    "direction": {"type": "string", "enum": ["LR", "TB"]},
+    "spine": {"type": "array", "items": S,
+              "description": "node/group ids of the main story line, in reading order"},
+    "placements": {"type": "array", "items": _obj({
+        "node": S, "side": {"type": "string", "enum": LAYOUT_SIDES}, "anchor": S})},
+    "groups": {"type": "array", "items": _obj({
+        "group": S, "orientation": {"type": "string", "enum": ["row", "column"]}})},
+})
+CONSOLIDATOR_SCHEMA = _obj({
+    "summary": S,
+    "ops": {"type": "array", "items": FLAT_OP},
+    "layout": LAYOUT_SCHEMA,
+})
+
+
 def clean_ops(data: dict | None) -> dict | None:
     """Give each op only its own fields, with "" (not used) as null: the shape Board expects."""
     if not data or not isinstance(data.get("ops"), list):

@@ -162,11 +162,16 @@ class AgentPipeline:
                 kept.append(op)
         return kept, rejected
 
-    async def _emit_board(self, result: dict, agent: str) -> None:
-        if not result["applied"]:
+    async def _emit_board(self, result: dict, agent: str, layout: dict | None = None) -> None:
+        """Board event after an agent changed the board. `layout`: the plan the consolidator just stored
+        (a changed plan is sent even without ops, so the browser can re-lay out; it is in the board too)."""
+        if not result["applied"] and layout is None:
             return
-        await self.emit({"type": "board", "agent": agent, "board": self.board.to_dict(),
-                         "applied": result["applied"], "version": self.board.version})
+        ev = {"type": "board", "agent": agent, "board": self.board.to_dict(),
+              "applied": result["applied"], "version": self.board.version}
+        if layout is not None:
+            ev["layout"] = {"board": layout["board"], **layout["plan"]}
+        await self.emit(ev)
 
     # -------------------------------------------------------------- analyst
     def _kick_analyst(self, force: bool = False) -> None:
@@ -253,7 +258,9 @@ class AgentPipeline:
             transcript = self._meaningful_transcript()
             if not transcript or not self.board.active:
                 return
-            res = await agents.consolidate(self.meeting, transcript, self.board.compact())
+            bid, hints = self.board.active, agents.settings.LAYOUT_HINTS
+            res = await agents.consolidate(self.meeting, transcript, self.board.compact(),
+                                           layout=self.board.layout_of(bid) if hints else None)
             ops = [op for op in (res.data or {}).get("ops", []) if isinstance(op, dict)]
             by_lookup = self._speakers()
             for op in ops:
@@ -264,13 +271,17 @@ class AgentPipeline:
             result = self.board.apply_ops(ops, by_lookup=by_lookup)
             result["rejected"] = guard_rejected + result["rejected"]
             summary = (res.data or {}).get("summary") or ("consolidator error" if res.error else "")
-            await self._emit_board(result, "consolidator")
-            await self.emit({"type": "activity", "item": {
-                "agent": "consolidator", "utts": [transcript[-1]["id"]], "latency_ms": res.latency_ms,
-                "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "error": res.error,
-                "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}})
-            log.info("consolidator %5dms ops=%d rejected=%d | %s", res.latency_ms, len(result["applied"]),
-                     len(result["rejected"]), summary)
+            # layout plan: validated against the board after the ops (it may use a group the ops just added)
+            changed = self.board.set_layout(bid, (res.data or {}).get("layout")) if hints else None
+            await self._emit_board(result, "consolidator", {"board": bid, "plan": changed} if changed else None)
+            item = {"agent": "consolidator", "utts": [transcript[-1]["id"]], "latency_ms": res.latency_ms,
+                    "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "error": res.error,
+                    "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}
+            if hints and self.board.layout_of(bid):
+                item["layout"] = {"board": bid, "changed": changed is not None, **self.board.layout_of(bid)}
+            await self.emit({"type": "activity", "item": item})
+            log.info("consolidator %5dms ops=%d rejected=%d layout=%s | %s", res.latency_ms, len(result["applied"]),
+                     len(result["rejected"]), _plan_line(self.board.layout_of(bid)) if hints else "off", summary)
             _log_ops(result)
         except asyncio.CancelledError:
             pass
@@ -288,6 +299,13 @@ class AgentPipeline:
     def _elapsed(self) -> float:
         """Seconds since the session started, for activity items."""
         return round(time.perf_counter() - self.t0, 2)
+
+
+def _plan_line(plan: dict | None) -> str:
+    if not plan:
+        return "none"
+    places = ", ".join(f'{p["node"]} {p["side"]} {p["anchor"]}' for p in plan["placements"])
+    return f'{plan["direction"]} {" > ".join(plan["spine"]) or "-"}' + (f" [{places}]" if places else "")
 
 
 def _log_ops(result: dict) -> None:

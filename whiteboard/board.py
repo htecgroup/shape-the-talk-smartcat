@@ -35,6 +35,11 @@ OP_FIELDS: dict[str, tuple[set[str], set[str]]] = {
 COMMON_FIELDS = {"op", "src", "by", "board"}
 # Board ids often are "<subject>_<kind>"; a model that connects to the board id usually means the subject node.
 BOARD_ID_SUFFIXES = ("_system_map", "_architecture", "_process", "_diagram", "_board", "_arch", "_flow", "_map")
+# Layout plan (from the consolidator, LW_LAYOUT_HINTS): semantic hints the browser's layout follows.
+LAYOUT_DIRECTIONS = {"LR", "TB"}
+LAYOUT_SIDES = {"before", "after", "above", "below"}
+LAYOUT_ORIENTATIONS = {"row", "column"}
+LAYOUT_MAX = 24             # max spine entries / placements / group entries kept
 
 
 class OpError(ValueError):
@@ -134,6 +139,56 @@ class BoardState:
         if target in b["edges"]:
             return "edge", b["edges"][target]
         return None
+
+    # ------------------------------------------------------------ layout plan
+    def normalize_layout(self, board_id: str, raw: Any) -> dict | None:
+        """A cleaned layout plan for a board, or None when the board is unknown or raw is not a plan.
+
+        Unknown ids are dropped; a spine needs two entries; a placement needs a node and an anchor that both
+        exist (node or group ids), a valid side, and a node that is not on the spine (spine order wins)."""
+        b = self.boards.get(board_id)
+        if b is None or not isinstance(raw, dict):
+            return None
+        known = lambda i: i in b["nodes"] or i in b["groups"]  # noqa: E731
+        ids = lambda v: [slug(x) for x in v if isinstance(x, str)] if isinstance(v, list) else []  # noqa: E731
+        direction = str(raw.get("direction") or "LR").strip().upper()
+        spine: list[str] = []
+        for i in ids(raw.get("spine")):
+            if known(i) and i not in spine:
+                spine.append(i)
+        spine = spine[:LAYOUT_MAX] if len(spine) >= 2 else []
+        placements: list[dict] = []
+        for p in raw.get("placements") or []:
+            if not isinstance(p, dict) or len(placements) >= LAYOUT_MAX:
+                continue
+            node, anchor, side = slug(p.get("node") or ""), slug(p.get("anchor") or ""), p.get("side")
+            if (known(node) and known(anchor) and node != anchor and side in LAYOUT_SIDES and node not in spine
+                    and all(q["node"] != node for q in placements)):
+                placements.append({"node": node, "side": side, "anchor": anchor})
+        groups: list[dict] = []
+        for g in raw.get("groups") or []:
+            gid = slug(g.get("group") or "") if isinstance(g, dict) else ""
+            if gid in b["groups"] and g.get("orientation") in LAYOUT_ORIENTATIONS and all(q["group"] != gid for q in groups):
+                groups.append({"group": gid, "orientation": g["orientation"]})
+        return {"direction": direction if direction in LAYOUT_DIRECTIONS else "LR",
+                "spine": spine, "placements": placements, "groups": groups[:LAYOUT_MAX]}
+
+    def set_layout(self, board_id: str, raw: Any) -> dict | None:
+        """Store a validated layout plan on the board (board["layout"], so it is part of to_dict(), snapshots
+        and saved runs). Returns the stored plan if it changed, else None. Not part of undo: a plan only
+        orders what is on the board, and the browser ignores ids that are gone."""
+        plan = self.normalize_layout(board_id, raw)
+        if plan is None or plan == self.layout_of(board_id):
+            return None
+        self.version += 1
+        plan["v"] = self.version
+        self.boards[board_id]["layout"] = plan
+        return plan
+
+    def layout_of(self, board_id: str | None) -> dict | None:
+        """The board's current plan without its version stamp (what the consolidator sees)."""
+        plan = (self.boards.get(board_id) or {}).get("layout") if board_id else None
+        return {k: v for k, v in plan.items() if k != "v"} if plan else None
 
     # ------------------------------------------------------------- primitives
     # Every mutation goes through these. Each records the primitive that undoes it.

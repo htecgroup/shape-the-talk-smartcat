@@ -159,6 +159,7 @@ const BoardRouting = (() => {
    * travel; consecutive waypoints in opposite directions make a U-turn round
    * the end of a band. While the nodes glide, the waypoints glide with them. */
   function routedPath(a, b, rt, pa, pb) {
+    if (rt.poly) return outsidePath(a, b, rt.poly);
     const n = rt.pts.length;
     const pts = rt.pts.map((q, i) => {
       const f = (i + 1) / (n + 1);
@@ -184,6 +185,21 @@ const BoardRouting = (() => {
     }
     mid = segs[Math.floor(segs.length / 2)].mid;
     return { d, mid };
+  }
+
+  /* A back edge round the outside of the layout (see tidy.js): sideways out to
+   * the line X and along it ("v"), or up over the row to the line Y ("h"). */
+  function outsidePath(a, b, poly) {
+    if (poly.kind === "h") {
+      return roundedPolyline([{ x: a.x, y: a.y - a.h / 2 }, { x: a.x, y: poly.Y }, { x: b.x, y: poly.Y }, { x: b.x, y: b.y - b.h / 2 - 3 }]);
+    }
+    const sa = Math.sign(poly.X - a.x) || 1, sb = Math.sign(poly.X - b.x) || 1;
+    const p = roundedPolyline([{ x: a.x + sa * a.w / 2, y: a.y }, { x: poly.X, y: a.y }, { x: poly.X, y: b.y }, { x: b.x + sb * (b.w / 2 + 3), y: b.y }]);
+    // the label on the longer horizontal leg, not out on the margin line
+    const la = Math.abs(poly.X - a.x) - a.w / 2, lb = Math.abs(poly.X - b.x) - b.w / 2;
+    const [n, s] = la >= lb ? [a, sa] : [b, sb];
+    if (Math.max(la, lb) > 90) p.mid = { x: (n.x + s * n.w / 2 + poly.X) / 2, y: n.y };
+    return p;
   }
 
   function directPath(a, b) {

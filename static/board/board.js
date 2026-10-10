@@ -108,7 +108,7 @@ const Board = (() => {
     for (const k of [...routes.keys()]) if (k.startsWith(`${shown}:`)) routes.delete(k);
     for (const [eid, rt] of next.routes) {
       const e = board.edges[eid];
-      routes.set(key(shown, eid), { pts: rt.pts, rev: rt.rev, a: { ...next.pos.get(e.from) }, b: { ...next.pos.get(e.to) } });
+      routes.set(key(shown, eid), { pts: rt.pts, rev: rt.rev, poly: rt.poly, a: { ...next.pos.get(e.from) }, b: { ...next.pos.get(e.to) } });
     }
     autoFit = true; fit();
     camTween = { ...cam, t0: now };   // the camera glides in step with the nodes

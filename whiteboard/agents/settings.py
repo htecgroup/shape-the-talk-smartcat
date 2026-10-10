@@ -24,5 +24,8 @@ EXTRACTOR_BACKEND = os.getenv("LW_EXTRACTOR_BACKEND", "jev")
 CONSOLIDATOR_MODEL = os.getenv("LW_CONSOLIDATOR_MODEL", MODEL)
 CONSOLIDATOR_EFFORT = os.getenv("LW_CONSOLIDATOR_EFFORT", "medium")
 CONSOLIDATOR_THINKING = os.getenv("LW_CONSOLIDATOR_THINKING", "adaptive")
+# LW_LAYOUT_HINTS: "1" (default) the consolidator also returns a semantic layout plan for the active board
+# (story spine, direction, placements, group orientation) that the browser's Tidy follows; "0" = graph-only layout.
+LAYOUT_HINTS = os.getenv("LW_LAYOUT_HINTS", "1") != "0"
 JEV_MODEL = os.getenv("LW_JEV_MODEL", "jev-latest")
 MAX_TOKENS = 16000

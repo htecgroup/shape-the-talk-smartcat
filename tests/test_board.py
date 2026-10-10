@@ -244,3 +244,27 @@ def test_connect_to_board_id_without_matching_node_is_rejected_clearly():
         "reroute: 'system_map' is a board (tab) id, not a node",
         "connect: no node 'nowhere'"]
     assert set(edges(s)) == {"api->db"}
+
+
+def test_layout_plan_is_validated_and_stored_on_the_board():
+    s = base()
+    s.apply_ops([{"op": "add_node", "id": "db", "label": "Orders DB", "type": "data", "src": "u2"},
+                 {"op": "add_group", "id": "pay", "label": "Payment", "src": "u2"}], by_lookup=BY)
+    v = s.version
+    raw = {"direction": "tb", "spine": ["checkout", "Bank", "nope", "checkout"],
+           "placements": [{"node": "db", "side": "below", "anchor": "bank"},
+                          {"node": "db", "side": "after", "anchor": "bank"},        # one placement per node
+                          {"node": "bank", "side": "after", "anchor": "checkout"},  # on the spine: spine wins
+                          {"node": "ghost", "side": "below", "anchor": "bank"},
+                          {"node": "pay", "side": "sideways", "anchor": "bank"}],
+           "groups": [{"group": "pay", "orientation": "column"}, {"group": "nope", "orientation": "row"},
+                      {"group": "pay", "orientation": "diagonal"}]}
+    plan = s.set_layout("flow", raw)
+    assert plan == {"direction": "TB", "spine": ["checkout", "bank"],
+                    "placements": [{"node": "db", "side": "below", "anchor": "bank"}],
+                    "groups": [{"group": "pay", "orientation": "column"}], "v": v + 1}
+    assert s.to_dict()["boards"][0]["layout"] == plan and "layout" not in s.compact()["boards"][0]
+    assert s.set_layout("flow", raw) is None and s.version == v + 1          # same plan: no change, no event
+    assert s.set_layout("nope", raw) is None and s.set_layout("flow", "spine") is None
+    fallback = s.set_layout("flow", {"direction": "diagonal", "spine": ["bank"], "placements": [], "groups": []})
+    assert fallback["direction"] == "LR" and fallback["spine"] == []         # a spine needs two entries

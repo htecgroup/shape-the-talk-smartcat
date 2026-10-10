@@ -24,7 +24,17 @@ const BoardTidy = (() => {
    * nodes end up in a row at the bottom; a mind map grows to both sides of
    * its root. Edges that skip ranks follow their dummy nodes as waypoints;
    * edges that would still run through nodes are routed round them (see
-   * edgePath). Deterministic for a given board + panel size. */
+   * edgePath). Deterministic for a given board + panel size.
+   *
+   * Layout plan (board.layout, from the consolidator when LW_LAYOUT_HINTS is
+   * on): the meaning the graph doesn't carry. The spine (the story's main line
+   * in reading order) decides which edges are back edges and becomes the main
+   * line, with undrawn virtual edges between consecutive spine entries so it
+   * stays one component; placements put a side node one rank before / after
+   * its anchor or beside it (same rank, above / below); groups can be a row or
+   * a column; direction TB lays the board out top to bottom (transposed, no
+   * wrapping). Ids the board doesn't know are ignored, and without a plan
+   * everything works as before. */
   const GX = 64, GY = 30, BANDGAP = 70, COMPGAP = 84, GPAD = { l: 22, r: 22, t: 36, b: 22 };
 
   // order-preserving projection: y[i+1] - y[i] >= gap[i], closest to t (weighted)
@@ -44,13 +54,20 @@ const BoardTidy = (() => {
     return y;
   }
 
-  /* One connected component: items [{id, w, h, v, actor}], edges [{from, to, lw}].
+  const NOHINT = { spine: [], place: new Map() };
+
+  /* One connected component: items [{id, w, h, v, actor}], edges [{from, to, lw, virtual}].
+   * hint: the layout plan for these items, {spine: [ids], place: Map id -> {side, anchor}}.
    * Returns positions relative to the component's top-left corner. */
-  function layoutComponent(items, edges, B) {
+  function layoutComponent(items, edges, B, hint = NOHINT) {
     const it = new Map(items.map((i) => [i.id, i]));
     const V = new Map(items.map((i) => [i.id, i.v]));
     const cmp = (a, b) => V.get(a) - V.get(b);
     const ids = items.map((i) => i.id).sort(cmp);
+    const sp = new Map(hint.spine.filter((id) => it.has(id)).map((id, i) => [id, i]));
+    if (sp.size < 2) sp.clear();
+    const place = new Map([...hint.place].filter(([u, p]) => it.has(u) && it.has(p.anchor) && !sp.has(u)));
+    const onSpine = (a, b) => sp.has(a) && sp.has(b) && Math.abs(sp.get(a) - sp.get(b)) === 1;
 
     // 1. break cycles: DFS from the entry points, back edges get reversed
     const out = new Map(ids.map((id) => [id, []]));
@@ -70,7 +87,30 @@ const BoardTidy = (() => {
       }
       state.set(u, 2);
     };
-    for (const r of roots) if (!state.get(r)) visit(r);
+    if (sp.size) {
+      // with a spine the story decides: a topological order in which the spine
+      // comes in spine order (a cycle is cut at the next spine entry); edges
+      // against that order are the back edges, whatever their direction
+      const left = new Map(indeg), order = new Map(), spineIds = [...sp.keys()];
+      const rest = new Set(ids);
+      let next = 0;
+      while (rest.size) {
+        let u = null;
+        for (const c of rest) {
+          if (left.get(c) || (sp.has(c) && sp.get(c) !== next)) continue;
+          if (u == null || sp.has(c) - sp.has(u) > 0 || (sp.has(c) === sp.has(u) && (entry(c) - entry(u) || cmp(c, u)) < 0)) u = c;
+        }
+        if (u == null) u = next < spineIds.length ? spineIds[next] : [...rest].sort((a, b) => entry(a) - entry(b) || cmp(a, b))[0];
+        rest.delete(u); order.set(u, order.size);
+        if (sp.has(u)) next++;
+        for (const e of out.get(u)) left.set(e.to, left.get(e.to) - 1);
+      }
+      for (const e of edges) {
+        const fwd = order.get(e.from) < order.get(e.to);
+        dag.push({ from: fwd ? e.from : e.to, to: fwd ? e.to : e.from, lw: e.lw, virtual: e.virtual, ...(fwd ? {} : { rev: true }) });
+      }
+    } else for (const r of roots) if (!state.get(r)) visit(r);
+    for (const d of dag) d.sp = onSpine(d.from, d.to);
 
     // 2. ranks: longest path, then sources sit right before what they feed
     const succ = new Map(ids.map((id) => [id, []])), pred = new Map(ids.map((id) => [id, []]));
@@ -85,8 +125,20 @@ const BoardTidy = (() => {
     const rank = new Map();
     for (const u of topo) rank.set(u, Math.max(0, ...pred.get(u).map((p) => rank.get(p) + 1)));
     for (const u of [...topo].reverse()) if (!pred.get(u).length && succ.get(u).length) rank.set(u, Math.min(...succ.get(u).map((s) => rank.get(s))) - 1);
+    // the plan's placements: one rank before / after the anchor, or beside it
+    // (same rank); what hangs off a placed node moves along with it
+    if (place.size) {
+      const fixed = new Set([...sp.keys(), ...place.keys()]);
+      for (let pass = 0; pass < 2; pass++) for (const [u, p] of place) rank.set(u, rank.get(p.anchor) + (p.side === "before" ? -1 : p.side === "after" ? 1 : 0));
+      for (const u of topo) if (!fixed.has(u) && pred.get(u).length) rank.set(u, Math.max(...pred.get(u).map((q) => rank.get(q) + 1)));
+    }
     const r0 = Math.min(...rank.values());
     for (const u of ids) rank.set(u, rank.get(u) - r0);
+    // edges that no longer point forward (a placement beside / against the flow)
+    // and virtual edges that skip ranks only pull in y (soft); they get no corridor
+    const fwdDag = dag.filter((d) => rank.get(d.to) > rank.get(d.from) && !(d.virtual && rank.get(d.to) - rank.get(d.from) > 1));
+    const soft = dag.filter((d) => !fwdDag.includes(d)).map((d) => [d.from, d.to, d.sp ? 8 : d.virtual ? 2 : 1]);
+    for (const [u, p] of place) soft.push([u, p.anchor, 4]);
 
     // 3. dummy nodes for edges that skip ranks: they keep a free corridor and
     //    become the edge's waypoints (long back edges just take a direct curve)
@@ -94,7 +146,7 @@ const BoardTidy = (() => {
     const aS = new Map(ids.map((id) => [id, []])), aP = new Map(ids.map((id) => [id, []]));
     const links = [], chains = [];
     let nd = 0;
-    for (const d of dag) {
+    for (const d of fwdDag) {
       const span = rank.get(d.to) - rank.get(d.from);
       let a = d.from;
       const chain = [];
@@ -105,7 +157,7 @@ const BoardTidy = (() => {
       }
       if (chain.length) chains.push({ from: d.rev ? d.to : d.from, to: d.rev ? d.from : d.to, rev: !!d.rev, ids: chain });
       for (const b of [...chain, d.to]) {
-        links.push({ a, b, lw: span === 1 ? d.lw : 0 });
+        links.push({ a, b, lw: span === 1 ? d.lw : 0, sp: d.sp });
         aS.get(a).push(b); aP.get(b).push(a); a = b;
       }
     }
@@ -123,15 +175,19 @@ const BoardTidy = (() => {
       return [id, l.filter((s) => toEnd.get(s) === toEnd.get(b)).length === 1 ? b : null];
     }));
     const bestP = new Map([...N.keys()].map((id) => [id, best(aP.get(id), () => 0)]));
-    for (const l of links) l.wt = bestS.get(l.a) === l.b && bestP.get(l.b) === l.a ? 8 : 1;
+    // with a spine, the spine is the main line and what touches it is a branch
+    for (const l of links) {
+      l.wt = l.sp ? 8 : sp.size && (sp.has(l.a) || sp.has(l.b)) ? 1 : bestS.get(l.a) === l.b && bestP.get(l.b) === l.a ? 8 : 1;
+    }
 
     // 4. order inside the ranks: DFS discovery (main line first), then barycenter sweeps
     const disc = new Map();
+    const spFirst = (u) => (sp.has(u) ? 0 : 1);
     const dfs = (u) => {
       if (disc.has(u)) return; disc.set(u, disc.size);
-      for (const s of [...aS.get(u)].sort((a, b) => toEnd.get(b) - toEnd.get(a) || byV(a, b))) dfs(s);
+      for (const s of [...aS.get(u)].sort((a, b) => spFirst(a) - spFirst(b) || toEnd.get(b) - toEnd.get(a) || byV(a, b))) dfs(s);
     };
-    for (const r of [...ids].sort((a, b) => rank.get(a) - rank.get(b) || entry(a) - entry(b) || cmp(a, b))) dfs(r);
+    for (const r of [...ids].sort((a, b) => rank.get(a) - rank.get(b) || spFirst(a) - spFirst(b) || entry(a) - entry(b) || cmp(a, b))) dfs(r);
     let layers = Array.from({ length: R }, () => []);
     for (const n of N.values()) layers[n.r].push(n.id);
     layers.forEach((l) => l.sort((a, b) => disc.get(a) - disc.get(b)));
@@ -172,7 +228,7 @@ const BoardTidy = (() => {
     const gapW = Array.from({ length: R }, () => GX);
     for (const l of links) if (l.lw) gapW[N.get(l.a).r] = Math.max(gapW[N.get(l.a).r], l.lw + 40);
     const crossAt = Array(R).fill(0);
-    for (const d of dag) for (let r = rank.get(d.from); r < rank.get(d.to); r++) crossAt[r]++;
+    for (const d of fwdDag) for (let r = rank.get(d.from); r < rank.get(d.to); r++) crossAt[r]++;
     const span = (s, e) => { let w = colW[s]; for (let r = s + 1; r <= e; r++) w += gapW[r - 1] + colW[r]; return w; };
     const full = span(0, R - 1), Bf = Math.min(B, full);
     const f = [0], from = [0];
@@ -199,15 +255,29 @@ const BoardTidy = (() => {
       if (b > 0) first.sort((x, z) => into(x) - into(z) || idx.get(x) - idx.get(z));
       if (b < bands.length - 1) last.sort((x, z) => onward(x) - onward(z) || idx.get(x) - idx.get(z));
     });
+    // placed above / below: right next to the anchor in its rank
+    for (const [u, p] of place) {
+      if (p.side !== "above" && p.side !== "below") continue;
+      const l = layers[rank.get(u)];
+      if (!l.includes(p.anchor)) continue;
+      l.splice(l.indexOf(u), 1);
+      let i = l.indexOf(p.anchor) + (p.side === "below" ? 1 : 0);
+      if (p.side === "below") while (i < l.length && place.get(l[i]) && place.get(l[i]).anchor === p.anchor && place.get(l[i]).side === "below") i++;
+      l.splice(i, 0, u);
+    }
 
-    // 6. y inside each band, x by column; odd bands run right-to-left
+    // 6. y inside each band, x by column; bands alternate left-to-right and
+    //    right-to-left, except that a band of one column reads left-to-right
+    //    (its group runs the reading way) and the next one starts over
+    const bdir = [];
+    bands.forEach((rs, b) => bdir.push(rs.length === 1 || !b || bands[b - 1].length === 1 ? 1 : -bdir[b - 1]));
     const y = new Map(), pos = new Map(), dpos = new Map();
     // x: each band starts right under the end of the previous one, so the flow
     // turns straight down; it is nudged back inside the width used so far
     const bx = [];
     let lo = 0, hi = 0;
     bands.forEach((rs, b) => {
-      const dir = b % 2 ? -1 : 1, xs = [];
+      const dir = bdir[b], xs = [];
       let x = b ? bx[b - 1][bx[b - 1].length - 1] : colW[rs[0]] / 2;
       rs.forEach((r, i) => { if (i) x += dir * (colW[r - 1] / 2 + gapW[r - 1] + colW[r] / 2); xs.push(x); });
       let l = Math.min(...rs.map((r, i) => xs[i] - colW[r] / 2)), h = Math.max(...rs.map((r, i) => xs[i] + colW[r] / 2));
@@ -226,6 +296,7 @@ const BoardTidy = (() => {
       const nbs = new Map();
       for (const l of L.flat()) nbs.set(l, []);
       for (const l of links) if (nbs.has(l.a) && nbs.has(l.b)) { nbs.get(l.a).push([l.b, l.wt]); nbs.get(l.b).push([l.a, l.wt]); }
+      for (const [a, c, k] of soft) if (nbs.has(a) && nbs.has(c)) { nbs.get(a).push([c, k]); nbs.get(c).push([a, k]); }
       const sep = (a, c) => (N.get(a).h + N.get(c).h) / 2 + (N.get(a).dummy || N.get(c).dummy ? GY / 2 : GY);
       for (const l of L) {
         let yy = 0;
@@ -249,7 +320,7 @@ const BoardTidy = (() => {
       }
       let y0 = Infinity, y1 = -Infinity;
       for (const u of L.flat()) { y0 = Math.min(y0, y.get(u) - N.get(u).h / 2); y1 = Math.max(y1, y.get(u) + N.get(u).h / 2); }
-      const dir = b % 2 ? -1 : 1;
+      const dir = bdir[b];
       rs.forEach((r, i) => {
         for (const u of L[i]) {
           const p = { x: bx[b][i] - lo, y: top + y.get(u) - y0, dir };
@@ -263,8 +334,11 @@ const BoardTidy = (() => {
       const pts = c.ids.map((u) => { const p = dpos.get(u); return { ...p, dir: c.rev ? -p.dir : p.dir }; });
       return { from: c.from, to: c.to, rev: c.rev, pts: c.rev ? pts.reverse() : pts };
     });
-    const cuts = dag.filter((d) => bandOf.get(rank.get(d.from)) !== bandOf.get(rank.get(d.to))).length;
-    return { pos, routes, w: W, h: top - BANDGAP, bands: bands.length, cuts };
+    const cuts = dag.filter((d) => !d.virtual && bandOf.get(rank.get(d.from)) !== bandOf.get(rank.get(d.to))).length;
+    // long back edges (they close a loop, e.g. the result shared back into where
+    // the story started) get no corridor; layoutBoard routes them round the outside
+    const backs = fwdDag.filter((d) => d.rev && !d.virtual && rank.get(d.to) - rank.get(d.from) > 2).map((d) => `${d.to}>${d.from}`);
+    return { pos, routes, backs, w: W, h: top - BANDGAP, bands: bands.length, cuts };
   }
 
   /* Mind map: the root in the middle, its branches split over a right and a
@@ -314,11 +388,12 @@ const BoardTidy = (() => {
     }
     const shift = (q) => ({ ...q, x: q.x - x0, y: q.y - y0 });
     for (const [u, q] of pos) pos.set(u, shift(q));
-    return { pos, routes: routes.map((rt) => ({ ...rt, pts: rt.pts.map(shift) })), w: x1 - x0, h: y1 - y0, bands: 1, cuts: 0 };
+    return { pos, routes: routes.map((rt) => ({ ...rt, pts: rt.pts.map(shift) })), backs: [], w: x1 - x0, h: y1 - y0, bands: 1, cuts: 0 };
   }
 
-  /* Several components stacked under each other, unconnected items in a row at the end. */
-  function layoutFlow(items, edges, B, mindmap = false) {
+  /* Several components stacked under each other, unconnected items in a row at the end.
+   * The component that holds the start of the spine comes first. */
+  function layoutFlow(items, edges, B, mindmap = false, hint = NOHINT) {
     const V = new Map(items.map((i) => [i.id, i.v]));
     const nbr = new Map(items.map((i) => [i.id, []]));
     for (const e of edges) { nbr.get(e.from).push(e.to); nbr.get(e.to).push(e.from); }
@@ -330,15 +405,18 @@ const BoardTidy = (() => {
       while (st.length) { const u = st.pop(); c.push(u); for (const w of nbr.get(u)) if (!seen.has(w)) { seen.add(w); st.push(w); } }
       if (c.length === 1) lone.push(c[0]); else comps.push(c);
     }
-    comps.sort((a, b) => b.length - a.length || Math.min(...a.map((u) => V.get(u))) - Math.min(...b.map((u) => V.get(u))));
+    const head = (c) => (hint.spine.length && c.includes(hint.spine[0]) ? 0 : 1);
+    comps.sort((a, b) => head(a) - head(b) || b.length - a.length || Math.min(...a.map((u) => V.get(u))) - Math.min(...b.map((u) => V.get(u))));
     const byId = new Map(items.map((i) => [i.id, i]));
-    const pos = new Map(), routes = [];
+    const pos = new Map(), routes = [], backs = [];
     let top = 0, W = 0, bands = 0, cuts = 0;
     for (const c of comps) {
       const cs = new Set(c);
-      const res = (mindmap ? layoutMindmap : layoutComponent)(c.map((u) => byId.get(u)), edges.filter((e) => cs.has(e.from)), B);
+      const res = mindmap ? layoutMindmap(c.map((u) => byId.get(u)), edges.filter((e) => cs.has(e.from)), B)
+        : layoutComponent(c.map((u) => byId.get(u)), edges.filter((e) => cs.has(e.from)), B, hint);
       for (const [u, p] of res.pos) pos.set(u, { ...p, y: p.y + top });
       for (const rt of res.routes) routes.push({ ...rt, pts: rt.pts.map((q) => ({ ...q, y: q.y + top })) });
+      backs.push(...(res.backs || []));
       top += res.h + COMPGAP; W = Math.max(W, res.w); bands += res.bands; cuts += res.cuts;
     }
     if (lone.length) {
@@ -352,7 +430,49 @@ const BoardTidy = (() => {
       }
       top = rowTop + rowH + COMPGAP; bands++;
     }
-    return { pos, routes, w: W, h: Math.max(0, top - COMPGAP), bands: Math.max(1, bands), cuts };
+    return { pos, routes, backs, w: W, h: Math.max(0, top - COMPGAP), bands: Math.max(1, bands), cuts };
+  }
+
+  /* Top to bottom: the same layout with x and y swapped (no waypoint routes:
+   * those are drawn for left-to-right travel; the edges route themselves). */
+  function layoutFlowTB(items, edges, B, hint) {
+    const res = layoutFlow(items.map((i) => ({ ...i, w: i.h, h: i.w })), edges.map((e) => ({ ...e, lw: 0 })), B, false, hint);
+    const pos = new Map([...res.pos].map(([u, q]) => [u, { x: q.y, y: q.x, dir: 1 }]));
+    return { pos, routes: [], backs: [], w: res.h, h: res.w, bands: res.bands, cuts: res.cuts };
+  }
+
+  /* The board's layout plan, checked against the board; null = no plan (or a mind map, which keeps its own shape). */
+  const SIDES = new Set(["before", "after", "above", "below"]);
+  function readPlan(board) {
+    const L = board.layout;
+    if (!L || typeof L !== "object" || board.kind === "mindmap") return null;
+    const groups = board.groups || {};
+    const known = (id) => typeof id === "string" && (board.nodes[id] || groups[id]);
+    const spine = [...new Set((Array.isArray(L.spine) ? L.spine : []).filter(known))];
+    const place = new Map();
+    for (const p of Array.isArray(L.placements) ? L.placements : []) {
+      if (p && known(p.node) && known(p.anchor) && p.node !== p.anchor && SIDES.has(p.side) && !spine.includes(p.node) && !place.has(p.node)) place.set(p.node, p);
+    }
+    const orient = new Map((Array.isArray(L.groups) ? L.groups : []).filter((g) => g && groups[g.group] && (g.orientation === "row" || g.orientation === "column")).map((g) => [g.group, g.orientation]));
+    return { tb: L.direction === "TB", spine: spine.length >= 2 ? spine : [], place, orient };
+  }
+
+  /* The plan as layout-only edges (never drawn): consecutive spine entries, so
+   * the story line stays one component and in order, and placed nodes to their
+   * anchor (when no real edge links them), so a placed node joins its anchor. */
+  function planEdges(ids, edges, hint) {
+    const has = new Set(ids), linked = new Set(edges.map((e) => `${e.from}>${e.to}`)), out = [];
+    const add = (a, b) => {
+      if (!has.has(a) || !has.has(b) || a === b || linked.has(`${a}>${b}`)) return;
+      linked.add(`${a}>${b}`); out.push({ from: a, to: b, lw: 0, virtual: true });
+    };
+    const sp = hint.spine.filter((id) => has.has(id));
+    for (let i = 1; i < sp.length; i++) add(sp[i - 1], sp[i]);
+    for (const [u, p] of hint.place) {
+      if (linked.has(`${u}>${p.anchor}`) || linked.has(`${p.anchor}>${u}`)) continue;
+      if (p.side === "before") add(u, p.anchor); else add(p.anchor, u);
+    }
+    return out;
   }
 
   /* sizes: Map node id -> {w, h} of the drawn nodes; panel: the board container's rect. */
@@ -373,11 +493,53 @@ const BoardTidy = (() => {
     const gkey = (g) => `\u0002${g}`;
     const block = (id) => (groups.has(board.nodes[id].group) ? gkey(board.nodes[id].group) : id);
 
+    // the plan, per level: inside each group its own members, outside the blocks
+    // (a group by its block; a node inside a group can't be placed from outside)
+    const plan = readPlan(board);
+    const NO = { spine: [], place: new Map() };
+    const blockRef = (id) => (groups.has(id) ? gkey(id) : board.nodes[id] ? block(id) : null);
+    const outerHint = !plan ? NO : {
+      spine: [...new Set(plan.spine.map(blockRef).filter(Boolean))],
+      place: new Map([...plan.place].filter(([u]) => groups.has(u) || (board.nodes[u] && block(u) === u))
+        .map(([u, p]) => [blockRef(u), { ...p, anchor: blockRef(p.anchor) }]).filter(([u, p]) => p.anchor && u !== p.anchor)),
+    };
+    const innerHint = (ms) => !plan ? NO : {
+      spine: plan.spine.filter((id) => ms.has(id)),
+      place: new Map([...plan.place].filter(([u, p]) => ms.has(u) && ms.has(p.anchor))),
+    };
+    const tb = !!(plan && plan.tb);
+
+    /* A long back edge round the outside: out of the side of its source, along
+     * the left or right of everything between its ends, into its target (or,
+     * within one row, over the top of the row). The side whose legs cross fewer
+     * nodes wins. Geometry only; routing.js draws it (rt.poly). */
+    const outside = (e, pos) => {
+      const a = { ...pos.get(e.from), ...item(e.from) }, b = { ...pos.get(e.to), ...item(e.to) };
+      const all = [...pos].map(([id, q]) => ({ id, ...q, ...item(id) }));
+      const PAD = 58;   // clear of the group boxes (22 px padding) too
+      if (Math.abs(a.y - b.y) < Math.max(a.h, b.h)) {
+        const between = all.filter((o) => o.x + o.w / 2 >= Math.min(a.x, b.x) && o.x - o.w / 2 <= Math.max(a.x, b.x));
+        return { pts: [], poly: { kind: "h", Y: Math.min(...between.map((o) => o.y - o.h / 2)) - PAD } };
+      }
+      const span = all.filter((o) => o.y + o.h / 2 >= Math.min(a.y, b.y) - 1 && o.y - o.h / 2 <= Math.max(a.y, b.y) + 1);
+      const side = (s) => {
+        const X = s > 0 ? Math.max(...span.map((o) => o.x + o.w / 2)) + PAD : Math.min(...span.map((o) => o.x - o.w / 2)) - PAD;
+        const leg = (n) => all.filter((o) => o.id !== n.id && Math.abs(o.y - n.y) < (o.h + n.h) / 2 && (s > 0 ? o.x > n.x : o.x < n.x)).length;
+        return { X, cost: leg(a) + leg(b) + (Math.abs(X - a.x) + Math.abs(X - b.x)) / 1e4 };
+      };
+      const l = side(-1), r = side(1);
+      return { pts: [], poly: { kind: "v", X: (l.cost <= r.cost ? l : r).X } };
+    };
+
     const at = (B) => {
       const inner = new Map(), items = [];
       for (const [g, members] of groups) {
-        const ms = new Set(members);
-        const res = layoutFlow(members.map(item), edges.filter((e) => ms.has(e.from) && ms.has(e.to)).map((e) => ({ from: e.from, to: e.to, lw: lw(e) })), B - GPAD.l - GPAD.r);
+        const ms = new Set(members), hint = innerHint(ms);
+        const ge = edges.filter((e) => ms.has(e.from) && ms.has(e.to)).map((e) => ({ from: e.from, to: e.to, lw: lw(e) }));
+        const all = [...ge, ...planEdges(members, ge, hint)];
+        const orient = (plan && plan.orient.get(g)) || (tb ? "column" : "row");
+        const res = orient === "column" ? layoutFlowTB(members.map(item), all, Infinity, hint)
+          : layoutFlow(members.map(item), all, (plan && plan.orient.get(g) === "row") || tb ? Infinity : B - GPAD.l - GPAD.r, false, hint);
         inner.set(gkey(g), res);
         items.push({ id: gkey(g), w: res.w + GPAD.l + GPAD.r, h: res.h + GPAD.t + GPAD.b, v: Math.min(...members.map((m) => order.get(m))), actor: false });
       }
@@ -389,7 +551,9 @@ const BoardTidy = (() => {
         const k = `${a}\u0003${b}`;
         seen.set(k, { from: a, to: b, lw: Math.max(lw(e), seen.has(k) ? seen.get(k).lw : 0) });
       }
-      const res = layoutFlow(items, [...seen.values()], B, board.kind === "mindmap");
+      const out = [...seen.values()];
+      out.push(...planEdges(items.map((i) => i.id), out, outerHint));
+      const res = tb ? layoutFlowTB(items, out, Infinity, outerHint) : layoutFlow(items, out, B, board.kind === "mindmap", outerHint);
       const pos = new Map(), wp = new Map();   // wp: "from>to" -> waypoints
       for (const rt of res.routes) wp.set(`${rt.from}>${rt.to}`, rt);
       let bands = res.bands, cuts = res.cuts;
@@ -403,9 +567,11 @@ const BoardTidy = (() => {
         for (const rt of sub.routes) wp.set(`${rt.from}>${rt.to}`, { ...rt, pts: rt.pts.map(place) });
       }
       const routes = new Map();
+      const backs = new Set([...(res.backs || []), ...[...inner.values()].flatMap((r) => r.backs || [])]);
       for (const e of edges) {
         const rt = wp.get(`${block(e.from)}>${block(e.to)}`) || wp.get(`${e.from}>${e.to}`);
         if (rt) routes.set(e.id, rt);
+        else if (backs.has(`${block(e.from)}>${block(e.to)}`) || backs.has(`${e.from}>${e.to}`)) routes.set(e.id, outside(e, pos));
       }
       return { pos, routes, w: res.w, h: res.h, bands, cuts };
     };
@@ -417,7 +583,7 @@ const BoardTidy = (() => {
     const PW = Math.max(320, panel.width - 168), PH = Math.max(240, panel.height - 112 - 30);
     const full = at(Infinity);
     let best = null;
-    for (let i = 0; i <= 14; i++) {
+    for (let i = 0; i <= (tb ? 0 : 14); i++) {   // top to bottom: no wrapping
       const B = i === 0 ? Infinity : full.w * (1 - i / 15);
       const res = i === 0 ? full : at(B);
       const k = Math.min(PW / Math.max(1, res.w), PH / Math.max(1, res.h + 26));

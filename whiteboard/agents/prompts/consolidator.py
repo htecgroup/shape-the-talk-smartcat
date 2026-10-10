@@ -21,7 +21,19 @@ RULES
 - At most ~8 ops. Fix the clearest problems first. If the board already matches the transcript, return an empty ops list.
 - Every op's "src" is the id of the transcript utterance that justifies it (e.g. the utterance that names the agent, or that says X consists of parts). It must be an existing utterance id from the transcript.
 
-summary: max 12 words, e.g. "Merged agent placeholders into named agents, grouped them" or "No cleanup needed"."""
+summary: max 12 words, e.g. "Merged agent placeholders into named agents, grouped them" or "No cleanup needed".{layout_notes}"""
+
+# Layout plan (LW_LAYOUT_HINTS=1): the consolidator also says how the active board should read. Code does the geometry.
+CONSOLIDATOR_LAYOUT_NOTES = """
+
+LAYOUT PLAN (always return "layout" for the active board, also when ops is empty)
+The renderer lays the board out automatically, but it only sees edges, not the story. You tell it how the board should READ; it does the geometry (no coordinates). Base the plan on the story told in the transcript (the order a presenter would walk through it: where things start, what happens next, where it ends), NOT on raw edge direction. Example: "the meeting audio goes to Whisper, then the classifier, then the agents, which draw the live whiteboard; the whiteboard is shared back into the meeting" -> spine teams_meeting, whisper, classifier, agents group, live_whiteboard, even though the edge live_whiteboard -> teams_meeting would put the whiteboard first.
+Use ids as they are AFTER your ops (a group you add can be used by its group id).
+- direction: "LR" (left to right; flows, processes, pipelines, architectures) or "TB" (top to bottom; only for hierarchies: stakeholder maps, org trees, a root broken down into parts).
+- spine: the main story line, ordered ids from first to last (usually 3-10). A group stands in the spine by its group id (its members are ordered by their own edges). Leave out side material: inputs, data stores, alternatives, notes.
+- placements: only for important nodes NOT on the spine whose place is not obvious from the edges (usually 0-6). side relative to anchor (a spine node or group): "before" = earlier in the flow (an input or actor that feeds the anchor), "after" = later (an output, a final result), "below" / "above" = beside the anchor across the flow (supporting data stores, logs, config, a second option). In TB, below/above mean right/left of the anchor.
+- groups: orientation per group: "row" when its members are steps one after another, "column" when they are parallel parts or a list. Omit groups you have no opinion on.
+Keep the plan stable: CURRENT LAYOUT PLAN shows your previous plan; return it unchanged unless the board or the story changed (a new step on the main line, a different start or end). Never list ids that are not on the board."""
 
 # Extra instructions for talk-live mode (see prompts/extractor.py).
 CONSOLIDATOR_SPEECH_NOTES = """

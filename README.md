@@ -27,11 +27,15 @@ drag/scroll to pan and zoom. Hover a node for its note, status and who changed i
 Every setting is listed with its default in [`.env.example`](.env.example). Shell variables override `.env`.
 The defaults are the recommended setup: Jev extractor, Claude Sonnet 5.5 with adaptive thinking for the modeller.
 A Haiku modeller without thinking is faster but leaves placeholders and duplicates on live speech.
+`LW_LAYOUT_HINTS=1` (default) lets the consolidator also return a layout plan for the active board: the story's
+main line in reading order (`spine`), `direction` (LR, or TB for hierarchies), `placements` of side nodes
+(before/after/above/below an anchor) and group orientation (row/column). The browser's Tidy follows it as constraints
+and still does the geometry itself. `LW_LAYOUT_HINTS=0` turns it off (graph-only layout, for comparison).
 
 ## Development
 
 ```bash
-uv run --group dev pytest -q tests                  # 45 tests, no network
+uv run --group dev pytest -q tests                  # 49 tests, no network
 uv run python scripts/simulate.py --speed 2         # headless simulated run: final boards + latency
 uv run python scripts/simulate.py --describe runs/<file>.json
 uv run python scripts/feed_audio.py [file.wav]      # stream a WAV into talk-live mode as if it were the mic
@@ -57,6 +61,7 @@ BoardState       single source of truth: validated, versioned, undo per utteranc
       ▲   ├─ Analyst       background, every 4 utterances: open questions, disagreements, closes stale disputes
       │   └─ Consolidator  background, every 6 utterances + at the end: merges duplicates and placeholders,
       │                    groups parts, connects loose nodes (cleanup ops, never touches disputes or tabs)
+      │                    + a layout plan: story spine, direction, placements (LW_LAYOUT_HINTS)
       ▼
 WebSocket → browser renderer (SVG + rough.js)       runs/<timestamp>.json → replay
 ```
@@ -71,7 +76,9 @@ is mapped to the node it names or rejected.
 proposals are dashed, `disputed` elements get a red outline and ❗ badge, `resolved` a ✓. Changes glow in the speaker's
 colour. New nodes are placed next to what they connect to and existing nodes never move. ✨ Tidy re-lays out the
 whole board (flow order, groups together, long flows wrapped to fit the panel, edges routed round nodes) when you click
-it, or automatically after the consolidator restructured the board.
+it, or automatically after the consolidator restructured the board or changed its layout plan. With a plan, the
+story's spine sets the flow order (and where it wraps), side nodes go where the plan puts them, and TB boards run top
+to bottom; without one (or for ids it doesn't know) Tidy falls back to the graph structure.
 
 ## Project layout
 

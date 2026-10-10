@@ -19,6 +19,7 @@ MEETING = {"id": "t", "title": "T", "topic": "x", "participants": [{"name": "Ana
 
 
 def test_consolidator_prompt_formats_and_reuses_modeller_schema(monkeypatch):
+    monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", False)
     seen = {}
 
     async def fake_call(name, system, user, schema, effort, model, thinking):
@@ -54,8 +55,9 @@ def fake_agents(monkeypatch, tmp_path):
         calls["order"].append(("analyst", len(transcript)))
         return CallResult({"open_questions": [], "disagreements": [], "suggested_marks": []}, 1)
 
-    async def consolidate(meeting, transcript, compact):
+    async def consolidate(meeting, transcript, compact, layout=None):
         calls["consolidate"].append(len(transcript))
+        calls.setdefault("layouts", []).append(layout)
         calls["order"].append(("consolidator", len(transcript)))
         ops = [{"op": "remove_node", "id": "n_u01", "src": "u01"},
                {"op": "connect", "from": "n_u02", "to": "n_u03", "status": "ghost", "src": "bogus"},
@@ -64,7 +66,9 @@ def fake_agents(monkeypatch, tmp_path):
                {"op": "mark", "target": "n_u04", "status": "disputed", "src": "u02"},
                {"op": "remove_node", "id": "n_u05", "src": "u05"},
                {"op": "remove_node", "id": "gone", "src": "u02"}] if len(calls["consolidate"]) == 1 else []
-        return CallResult({"summary": "cleanup", "ops": ops}, 7, 10, 2)
+        plan = {"direction": "LR", "spine": ["n_u03", "n_u02", "ghost_id"], "groups": [],
+                "placements": [{"node": "n_u04", "side": "below", "anchor": "n_u02"}]}
+        return CallResult({"summary": "cleanup", "ops": ops, "layout": plan}, 7, 10, 2)
 
     async def warmup():
         return None
@@ -135,3 +139,91 @@ def test_consolidator_disabled_with_zero(fake_agents, monkeypatch):
 
     s = asyncio.run(run())
     assert fake_agents["consolidate"] == [] and s.consolidator_task is None
+
+
+def test_layout_plan_schema_is_flat_and_prompt_follows_the_flag(monkeypatch):
+    lay = agents.CONSOLIDATOR_SCHEMA["properties"]["layout"]
+    assert agents.CONSOLIDATOR_SCHEMA["properties"]["ops"] == agents.MODELLER_SCHEMA["properties"]["ops"]
+    assert sorted(lay["required"]) == ["direction", "groups", "placements", "spine"]
+    text = json.dumps(agents.CONSOLIDATOR_SCHEMA)
+    assert "anyOf" not in text and '"null"' not in text          # the grammar compiler rejects both
+    for sub in (lay, lay["properties"]["placements"]["items"], lay["properties"]["groups"]["items"]):
+        assert sub["additionalProperties"] is False and sorted(sub["required"]) == sorted(sub["properties"])
+    seen = {}
+
+    async def fake_call(name, system, user, schema, effort, model, thinking):
+        seen.update(system=system, user=user, schema=schema)
+        return CallResult({"summary": "s", "ops": [], "layout": {"direction": "LR", "spine": ["a", "b"],
+                                                                   "placements": [], "groups": []}}, 5)
+
+    monkeypatch.setattr(agents.consolidator, "call_json", fake_call)
+    utt = [{"id": "u01", "speaker": "Ana", "text": "hi"}]
+    for hints in (True, False):
+        monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", hints)
+        res = asyncio.run(agents.consolidate(MEETING, utt, {"active_board": "b", "boards": []},
+                                             layout={"direction": "TB", "spine": ["x", "y"]}))
+        assert (seen["schema"] is agents.CONSOLIDATOR_SCHEMA) == hints
+        assert ("LAYOUT PLAN" in seen["system"]) == hints and ("CURRENT LAYOUT PLAN" in seen["user"]) == hints
+        assert ('"spine": ["x", "y"]' in seen["user"]) == hints
+        assert res.data["layout"]["spine"] == ["a", "b"]                                      # passed through
+        assert "{" not in seen["system"].split("Participants:")[0]
+
+
+def test_layout_plan_is_stored_emitted_and_recorded(fake_agents, monkeypatch):
+    monkeypatch.setattr(pipeline, "CONSOLIDATE_EVERY", 6)
+    monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", True)
+
+    async def run():
+        s = Session()
+        assert (await s.start("live", speed=16))["ok"]
+        await wait_for(lambda: s.status == "finished")
+        return s
+
+    s = asyncio.run(run())
+    plan = s.board.layout_of("b")
+    # validated against the board after the ops: unknown ids dropped, the placement anchors on a spine node
+    assert plan == {"direction": "LR", "spine": ["n_u03", "n_u02"], "groups": [],
+                    "placements": [{"node": "n_u04", "side": "below", "anchor": "n_u02"}]}
+    assert fake_agents["layouts"][0] is None and fake_agents["layouts"][-1] == plan   # the next pass sees the plan
+    boards = [e for e in s.timeline if e["type"] == "board" and e["agent"] == "consolidator"]
+    assert [e["layout"]["spine"] for e in boards if "layout" in e] == [["n_u03", "n_u02"]]   # sent once, when it changed
+    assert boards[0]["board"]["boards"][0]["layout"]["spine"] == ["n_u03", "n_u02"]          # and part of the board
+    acts = [e["item"] for e in s.timeline if e["type"] == "activity" and e["item"]["agent"] == "consolidator"]
+    assert acts[0]["layout"]["changed"] and not any(a["layout"]["changed"] for a in acts[1:])
+    assert s.snapshot()["board"]["boards"][0]["layout"]["spine"] == ["n_u03", "n_u02"]
+    saved = json.loads((recording.RUNS_DIR / s.run_file).read_text())
+    assert saved["final_board"]["boards"][0]["layout"]["spine"] == ["n_u03", "n_u02"]
+    assert saved["meta"]["consolidator"]["layout_hints"] is True
+
+    async def replay():   # replay re-emits the recorded board events, plan included
+        r = Session()
+        r.clients.add(sink := _Sink())
+        assert (await r.start("replay", run=s.run_file, speed=16))["ok"]
+        await wait_for(lambda: r.status == "finished")
+        return sink.events
+    got = asyncio.run(replay())
+    assert any(e["type"] == "board" and e.get("layout", {}).get("spine") == ["n_u03", "n_u02"] for e in got)
+
+
+def test_layout_hints_off_stores_no_plan(fake_agents, monkeypatch):
+    monkeypatch.setattr(pipeline, "CONSOLIDATE_EVERY", 6)
+    monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", False)
+
+    async def run():
+        s = Session()
+        assert (await s.start("live", speed=16))["ok"]
+        await wait_for(lambda: s.status == "finished")
+        return s
+
+    s = asyncio.run(run())
+    assert s.board.layout_of("b") is None and all(x is None for x in fake_agents["layouts"])
+    assert not any("layout" in e for e in s.timeline if e["type"] == "board")
+    assert not any("layout" in e["item"] for e in s.timeline if e["type"] == "activity")
+
+
+class _Sink:
+    def __init__(self):
+        self.events = []
+
+    async def send_text(self, data):
+        self.events.append(json.loads(data))
