@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from whiteboard import agents, session as session_mod, sources  # noqa: E402
+from whiteboard import agents, recording, session as session_mod, sources  # noqa: E402
 from whiteboard.agents import CallResult  # noqa: E402
 from whiteboard.audio import float_to_pcm16  # noqa: E402
 from whiteboard.session import Session  # noqa: E402
@@ -58,7 +58,7 @@ def fake_pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(agents, "analyse", analyse)
     monkeypatch.setattr(agents, "consolidate", consolidate)
     monkeypatch.setattr(agents, "warmup", warmup)
-    monkeypatch.setattr(session_mod, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(recording, "RUNS_DIR", tmp_path)
     return calls
 
 
@@ -161,11 +161,11 @@ def test_mic_interim_final_order_and_pipeline(fake_pipeline):
         return s.run_file
 
     run_file = asyncio.run(run())
-    saved = json.loads((session_mod.RUNS_DIR / run_file).read_text())
+    saved = json.loads((recording.RUNS_DIR / run_file).read_text())
     assert saved["meta"]["source"] == "mic" and saved["meta"]["complete"]
     assert saved["meeting"]["title"] == "Talk live: coffee"
     assert any(e["type"] == "utterance_interim" for e in saved["events"])   # replay shows text streaming in
-    assert session_mod.list_runs()[0]["source"] == "mic"
+    assert recording.list_runs()[0]["source"] == "mic"
 
 
 def test_mic_vad_commits_and_stop_flushes_last_utterance(fake_pipeline):
@@ -193,7 +193,7 @@ def test_mic_vad_commits_and_stop_flushes_last_utterance(fake_pipeline):
         await wait_for(lambda: s.status == "finished")
         assert [u["text"] for u in s.spoken] == ["First thought about the order flow.", "And the barista gets a tablet."]
         assert s.utt_timing["m001"]["speech_end_t"] is not None
-        lat = s._mic_latency()
+        lat = recording.mic_latency(s.utt_timing)
         assert lat["speech_end_to_final"]["n"] == 2
 
     asyncio.run(run())
@@ -249,6 +249,6 @@ def test_scripted_source_uses_same_pipeline(fake_pipeline, monkeypatch):
         await wait_for(lambda: s.status == "finished", 10)
         assert set(s.board.boards["b"]["nodes"]) == {"n_u01", "n_u02"}
         assert s.timeline[0]["type"] == "meeting"
-        assert "mic" not in json.loads((session_mod.RUNS_DIR / s.run_file).read_text())["meta"]["latency"]
+        assert "mic" not in json.loads((recording.RUNS_DIR / s.run_file).read_text())["meta"]["latency"]
 
     asyncio.run(run())

@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from whiteboard.session import Session, list_runs  # noqa: E402
+from whiteboard.recording import list_runs  # noqa: E402
+from whiteboard.session import Session  # noqa: E402
 from whiteboard.sources import MicSource  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")

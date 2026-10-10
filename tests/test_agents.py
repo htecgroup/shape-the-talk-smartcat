@@ -15,7 +15,7 @@ def test_modeller_flat_ops_become_per_op_shape():
          "id": "", "type": "", "note": "", "target": "", "kind": ""},
         {"op": "update_node", "src": "u02", "id": "a", "label": "", "type": "system", "note": "x"},
     ]}
-    ops = agents._clean_ops(data)["ops"]
+    ops = agents.clean_ops(data)["ops"]
     assert ops[0] == {"op": "connect", "src": "u01", "from": "a", "to": "b", "label": None, "status": None}
     assert ops[1] == {"op": "update_node", "src": "u02", "id": "a", "label": None, "type": "system", "note": "x"}
 

@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from whiteboard import agents, session as session_mod  # noqa: E402
+from whiteboard import agents, pipeline, recording, session as session_mod  # noqa: E402
 from whiteboard.agents import CallResult  # noqa: E402
 from whiteboard.session import Session  # noqa: E402
 
@@ -25,11 +25,11 @@ def test_consolidator_prompt_formats_and_reuses_modeller_schema(monkeypatch):
         seen.update(system=system, user=user, schema=schema, effort=effort, thinking=thinking)
         return CallResult({"summary": "s", "ops": [{"op": "remove_node", "src": "u01", "id": "agent_one", "from": ""}]}, 5)
 
-    monkeypatch.setattr(agents, "call_json", fake_call)
+    monkeypatch.setattr(agents.consolidator, "call_json", fake_call)
     for meeting in (MEETING, {**MEETING, "source": "mic"}):
         res = asyncio.run(agents.consolidate(meeting, [{"id": "u01", "speaker": "Ana", "text": "hi"}],
                                              {"active_board": "b", "boards": []}))
-        assert res.data["ops"] == [{"op": "remove_node", "src": "u01", "id": "agent_one"}]   # _clean_ops applied
+        assert res.data["ops"] == [{"op": "remove_node", "src": "u01", "id": "agent_one"}]   # clean_ops applied
         assert ("LIVE SPEECH" in seen["system"]) == (meeting.get("source") == "mic")
         assert "{" not in seen["system"].split("Participants:")[0]                          # all placeholders filled
     assert seen["schema"] is agents.MODELLER_SCHEMA and seen["effort"] == agents.CONSOLIDATOR_EFFORT
@@ -72,7 +72,7 @@ def fake_agents(monkeypatch, tmp_path):
     for name, fn in [("extract", extract), ("model", model), ("analyse", analyse),
                      ("consolidate", consolidate), ("warmup", warmup)]:
         monkeypatch.setattr(agents, name, fn)
-    monkeypatch.setattr(session_mod, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(recording, "RUNS_DIR", tmp_path)
     monkeypatch.setattr(session_mod, "load_meeting", lambda: MEETING)
     return calls
 
@@ -86,7 +86,7 @@ async def wait_for(cond, timeout=10.0):
 
 
 def test_consolidator_runs_every_n_and_at_the_end_with_guards(fake_agents, monkeypatch):
-    monkeypatch.setattr(session_mod, "CONSOLIDATE_EVERY", 6)
+    monkeypatch.setattr(pipeline, "CONSOLIDATE_EVERY", 6)
     seeded = {}
 
     async def run():
@@ -120,12 +120,12 @@ def test_consolidator_runs_every_n_and_at_the_end_with_guards(fake_agents, monke
     assert any(e["type"] == "board" and e["agent"] == "consolidator" for e in s.timeline)
     nodes = s.board.boards["b"]["nodes"]
     assert "n_u01" not in nodes and nodes["n_u05"]["status"] == "disputed" and "x" not in s.board.boards
-    saved = json.loads((session_mod.RUNS_DIR / s.run_file).read_text())
+    saved = json.loads((recording.RUNS_DIR / s.run_file).read_text())
     assert saved["meta"]["consolidator"]["every"] == 6 and saved["meta"]["latency"]["consolidator"]["calls"] == len(acts)
 
 
 def test_consolidator_disabled_with_zero(fake_agents, monkeypatch):
-    monkeypatch.setattr(session_mod, "CONSOLIDATE_EVERY", 0)
+    monkeypatch.setattr(pipeline, "CONSOLIDATE_EVERY", 0)
 
     async def run():
         s = Session()

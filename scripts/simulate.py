@@ -17,7 +17,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from whiteboard.session import RUNS_DIR, Session  # noqa: E402
+from whiteboard.recording import RUNS_DIR  # noqa: E402
+from whiteboard.session import Session  # noqa: E402
 
 
 def describe(path: Path) -> None:

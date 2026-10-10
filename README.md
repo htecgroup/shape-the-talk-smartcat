@@ -27,7 +27,7 @@ Then open:
 Controls: the Simulated / Talk live / Replay toggle, Start, Pause/Resume (also the space bar), speed 1×/2×/4×, Reset, the Live/Replay toggle plus a run picker,
 board tabs, ✨ Tidy (a full flow re-layout on demand), ⤢ Fit, and drag/scroll to pan and zoom. Hover a node for its note, status and who changed it.
 
-`ANTHROPIC_API_KEY` (agents) and `OPENAI_API_KEY` (Talk live transcription and the test-audio script only) are read from `.env` and never logged.
+`ANTHROPIC_API_KEY` (agents) and `OPENAI_API_KEY` (Talk live transcription and the test-audio script only) are read from `.env` and never logged. Start from the template, which lists every setting with its default: `cp .env.example .env`.
 
 Other entry points:
 
@@ -42,15 +42,15 @@ curl -XPOST localhost:8010/api/control -d '{"cmd":"start","mode":"live","speed":
 
 Optional env vars: `LW_MODEL` (default `claude-sonnet-5-5`), `LW_EXTRACTOR_EFFORT` (`low`), `LW_MODELLER_EFFORT` (`low`),
 `LW_ANALYST_EFFORT` (`low`). Consolidator: `LW_CONSOLIDATOR_MODEL` (default `LW_MODEL`), `LW_CONSOLIDATOR_EFFORT` (`medium`),
-`LW_CONSOLIDATOR_THINKING` (`adaptive`), `LW_CONSOLIDATE_EVERY` (`6` meaningful utterances; `0` disables it). `LW_MODELLER_MODEL` / `LW_EXTRACTOR_MODEL` (default `LW_MODEL`) and `LW_MODELLER_THINKING` / `LW_EXTRACTOR_THINKING` (`adaptive`; `disabled` on Haiku, `between_tools` on Sonnet) tune each agent alone. `LW_EXTRACTOR_BACKEND=jev` swaps the extractor to TypeSafe Jev (key in `.env` as `JEV_API_KEY`, model `LW_JEV_MODEL`, default `jev-latest`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
+`LW_CONSOLIDATOR_THINKING` (`adaptive`), `LW_CONSOLIDATE_EVERY` (`6` meaningful utterances; `0` disables it). `LW_MODELLER_MODEL` / `LW_EXTRACTOR_MODEL` (default `LW_MODEL`) and `LW_MODELLER_THINKING` / `LW_EXTRACTOR_THINKING` (`adaptive`; `disabled` on Haiku, `between_tools` on Sonnet) tune each agent alone. The extractor runs on TypeSafe Jev by default (`LW_EXTRACTOR_BACKEND=jev`, key in `.env` as `JEV_API_KEY`, model `LW_JEV_MODEL`, default `jev-latest`); `LW_EXTRACTOR_BACKEND=claude` runs it on Claude instead. Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
 (`local`/`server`, default picked from the model), `LW_VAD_SILENCE_MS` (`700`), `LW_VAD_MIN_RMS` (`220`),
 `LW_STT_NOISE_REDUCTION` (`far_field`, `near_field` or `none`), `LW_STT_LANGUAGE` (`en`).
 
-Recommended setup (Jev extractor, modeller on the default Sonnet with adaptive thinking):
-`LW_EXTRACTOR_BACKEND=jev uv run uvicorn server:app --port 8010`
+Recommended setup is the default (Jev extractor, modeller on Sonnet with adaptive thinking):
+`uv run uvicorn server:app --port 8010`
 
-Fastest setup measured on the mock meeting (~2.1 s utterance to board ops vs ~4.4 s default, same score on the clean
-scripted meeting): additionally `LW_MODELLER_MODEL=claude-haiku-5-5 LW_MODELLER_THINKING=disabled`. Avoid it for talk
+Fastest setup measured on the mock meeting (~2.1 s utterance to board ops vs ~4.4 s with the Claude extractor and Sonnet modeller, same score on the clean
+scripted meeting): `LW_MODELLER_MODEL=claude-haiku-5-5 LW_MODELLER_THINKING=disabled`. Avoid it for talk
 live: on fragmented live speech Haiku without thinking leaves placeholder nodes and duplicates behind (compare
 `runs/2026-10-10T09-26-01.json`, where Sonnet on the same transcript built a clean, connected board at the same latency).
 
@@ -86,13 +86,19 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
 | File | Role |
 |---|---|
 | `server.py` | FastAPI app: static files, `/ws` WebSocket (push + commands), `/ws/mic` (talk-live audio in), `/api/state`, `/api/runs`, `/api/control` |
-| `whiteboard/session.py` | Pipeline: `submit_utterance()`, extractor fan-out, ordered/batched modeller worker, analyst and consolidator scheduling, recording, replay |
+| `whiteboard/session.py` | `Session`: state, `emit()` (snapshot reducer, run timeline, WebSocket push), start/pause/speed/reset controls, replay |
+| `whiteboard/pipeline.py` | The agent pipeline (a mixin of `Session`): `submit_utterance()`, extractor fan-out, ordered/batched modeller worker, analyst and consolidator scheduling, the server-side op guards |
+| `whiteboard/recording.py` | Run files in `runs/`: list, resolve (`latest`), save with settings and latency stats |
 | `whiteboard/sources.py` | Pluggable utterance sources: `ScriptedSource` (mock meeting on the virtual clock) and `MicSource` (live speech) |
 | `whiteboard/stt.py` | OpenAI Realtime transcription client (raw WebSocket, key stays on the server) |
 | `whiteboard/audio.py` | PCM16 helpers, streaming resampler, adaptive energy VAD |
-| `whiteboard/agents.py` | The agents (extractor, modeller, analyst, consolidator): prompts, structured-output JSON schemas, the Anthropic call wrapper |
+| `whiteboard/agents/` | The agents. `__init__.py` is the API the session calls (`extract`, `model`, `consolidate`, `analyse`, `warmup`) |
+| `whiteboard/agents/extractor.py`, `extractor_jev.py`, `modeller.py`, `consolidator.py`, `analyst.py` | One module per agent: builds the user message, fills the prompt, calls the model (`extractor_jev.py`: the optional Jev backend) |
+| `whiteboard/agents/prompts/` | The prompt texts only, one module per agent (talk-live `LIVE SPEECH` notes next to their agent's prompt) |
+| `whiteboard/agents/schemas.py`, `llm.py`, `settings.py`, `context.py` | Structured-output JSON schemas and the flat-op mapping (`clean_ops`); the Anthropic/Jev clients and `call_json`; `LW_*` env settings; how meetings and utterances are written into prompts |
 | `whiteboard/board.py` | Op schema, validation, application, versioning, transactions, undo |
-| `static/board.js` | Renderer: shapes per node type, statuses, speaker-coloured highlights, stable layout, camera |
+| `static/board/board.js` | Renderer (`Board`): state, render, speaker-coloured highlights, groups, camera, animation, tooltip |
+| `static/board/shapes.js`, `place.js`, `tidy.js`, `routing.js`, `svg.js` | Shapes per node type and status; stable placement of new nodes; the ✨ Tidy re-layout; edge routing round nodes; small SVG helpers (plain `<script>` tags, no build step) |
 | `static/app.js`, `static/index.html`, `static/style.css` | Meeting panel, tabs, agent activity feed, lists, controls, talk-live panel |
 | `static/mic.js`, `static/pcm-worklet.js` | Mic capture: getUserMedia → AudioWorklet (resample to 24 kHz, PCM16) → `/ws/mic` |
 | `scripts/feed_audio.py`, `scripts/make_test_audio.py`, `data/test_audio/` | Talk-live test harness: TTS monologue streamed through `/ws/mic` |

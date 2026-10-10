@@ -141,7 +141,13 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
-  <script src="/static/board.js"></script>
+  <!-- the board renderer: helpers first, board/board.js (the Board API app.js uses) last -->
+  <script src="/static/board/svg.js"></script>
+  <script src="/static/board/shapes.js"></script>
+  <script src="/static/board/place.js"></script>
+  <script src="/static/board/tidy.js"></script>
+  <script src="/static/board/routing.js"></script>
+  <script src="/static/board/board.js"></script>
   <script src="/static/mic.js"></script>
   <script src="/static/app.js"></script>
 </body>
