@@ -314,7 +314,7 @@ class Session:
             "agent": "extractor", "utts": [utt["id"]], "speaker": utt["speaker"],
             "latency_ms": res.latency_ms, "kind": ex["kind"], "claims": ex.get("claims", []),
             "refers_to": ex.get("refers_to"), "topic_shift": ex.get("topic_shift", False), "error": res.error,
-            "tokens": [res.tokens_in, res.tokens_out], "t": round(time.perf_counter() - self.t0, 2)}})
+            "confidence": res.confidence, "tokens": [res.tokens_in, res.tokens_out], "t": round(time.perf_counter() - self.t0, 2)}})
         log.info("extract %s %-12s %5dms %s", utt["id"], ex["kind"], res.latency_ms,
                  "; ".join(ex.get("claims", []))[:120])
         return ex
@@ -480,6 +480,10 @@ class Session:
                      "source": self.meeting.get("source", "scripted"),
                      "efforts": {"extractor": agents.EXTRACTOR_EFFORT, "modeller": agents.MODELLER_EFFORT,
                                  "analyst": agents.ANALYST_EFFORT},
+                     "modeller": {"model": agents.MODELLER_MODEL, "thinking": agents.MODELLER_THINKING},
+                     "extractor": {"backend": agents.EXTRACTOR_BACKEND,
+                                   "model": agents.JEV_MODEL if agents.EXTRACTOR_BACKEND == "jev" else agents.EXTRACTOR_MODEL,
+                                   "thinking": agents.EXTRACTOR_THINKING},
                      "speed": self.clock.speed, "complete": complete,
                      "saved_at": datetime.now().isoformat(timespec="seconds"),
                      "event_count": len(self.timeline), "latency": stats},

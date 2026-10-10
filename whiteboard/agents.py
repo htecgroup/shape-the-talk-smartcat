@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from anthropic import AsyncAnthropic
+from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy
 
 log = logging.getLogger("agents")
 
@@ -25,6 +26,15 @@ MODEL = os.getenv("LW_MODEL", "claude-sonnet-5-5")
 EXTRACTOR_EFFORT = os.getenv("LW_EXTRACTOR_EFFORT", "low")
 MODELLER_EFFORT = os.getenv("LW_MODELLER_EFFORT", "low")
 ANALYST_EFFORT = os.getenv("LW_ANALYST_EFFORT", "low")
+# The modeller is on the live path (utterance -> board), so its model and thinking can be tuned alone.
+# LW_MODELLER_THINKING: "adaptive" (default) or "between_tools" (no thinking; Sonnet 5.5 only, effort <= high).
+MODELLER_MODEL = os.getenv("LW_MODELLER_MODEL", MODEL)
+MODELLER_THINKING = os.getenv("LW_MODELLER_THINKING", "adaptive")
+EXTRACTOR_MODEL = os.getenv("LW_EXTRACTOR_MODEL", MODEL)
+EXTRACTOR_THINKING = os.getenv("LW_EXTRACTOR_THINKING", "adaptive")
+# LW_EXTRACTOR_BACKEND: "claude" (default) or "jev" (TypeSafe System One classifier, key in JEV_API_KEY).
+EXTRACTOR_BACKEND = os.getenv("LW_EXTRACTOR_BACKEND", "claude")
+JEV_MODEL = os.getenv("LW_JEV_MODEL", "jev-latest")
 MAX_TOKENS = 16000
 
 KINDS = ["new_info", "correction", "disagreement", "resolution", "question", "undo", "chit_chat"]
@@ -46,19 +56,25 @@ class CallResult:
     tokens_in: int = 0
     tokens_out: int = 0
     error: str | None = None
+    confidence: float | None = None  # Jev only: confidence of the chosen kind
 
 
-async def call_json(name: str, system: str, user: str, schema: dict, effort: str) -> CallResult:
+async def call_json(name: str, system: str, user: str, schema: dict, effort: str,
+                    model: str = MODEL, thinking: str = "adaptive") -> CallResult:
     start = time.perf_counter()
+    extra: dict[str, Any] = {}
+    if thinking != "adaptive":
+        extra["thinking"] = {"type": thinking}
+    if not model.startswith("claude-haiku"):  # Haiku has no server-side refusal fallback
+        extra.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
     try:
         resp = await client().beta.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=MAX_TOKENS,
             system=system,
             messages=[{"role": "user", "content": user}],
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
+            **extra,
         )
         ms = int((time.perf_counter() - start) * 1000)
         usage = resp.usage
@@ -152,12 +168,109 @@ topic_shift: true ONLY when the speaker explicitly moves the discussion to a dif
 
 
 async def extract(meeting: dict, context: list[dict], utt: dict) -> CallResult:
+    if EXTRACTOR_BACKEND == "jev":
+        return await extract_jev(meeting, context, utt)
     system = EXTRACTOR_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
                                      participants=_participants(meeting),
                                      speech_notes=EXTRACTOR_SPEECH_NOTES if is_live_speech(meeting) else "")
     ctx = "\n".join(_line(u) for u in context[-6:]) or "(meeting just started)"
     user = f"Recent context:\n{ctx}\n\nNEW utterance to classify:\n{_line(utt)}"
-    return await call_json("extraction", system, user, EXTRACTOR_SCHEMA, EXTRACTOR_EFFORT)
+    return await call_json("extraction", system, user, EXTRACTOR_SCHEMA, EXTRACTOR_EFFORT,
+                           model=EXTRACTOR_MODEL, thinking=EXTRACTOR_THINKING)
+
+
+# ============================================================ Extractor (Jev backend)
+# Jev answers typed questions (choice / noul) about a `state`; it cannot write text, so claims are the
+# utterance itself. Jev reads instructions literally: definitions and boundary cases live in the criteria.
+JEV_KIND_CRITERIA = {
+    "new_info": "States facts, steps, actors, systems, data, flows or ownership of the process/system being designed, "
+                "or proposes/suggests something. Also an answer to an earlier question. Also an explicit move to a new "
+                "diagram or subject (\"let me switch gears and map the systems\").",
+    "correction": "Says that something said earlier is wrong and replaces it with the right version (\"no, it goes through "
+                  "X first\", \"actually the other way around\", \"they don't use X anymore\"). Answering a question with "
+                  "\"no\" is not a correction.",
+    "disagreement": "Objects to another person's statement or proposal and the group has not settled it (\"I don't agree\", "
+                    "\"but then...\"). Not a correction: it does not settle what is right.",
+    "resolution": "Accepts the correction, proposal or position of someone else, or settles an earlier disagreement "
+                  "(\"yes, that works\", \"right, fair\", \"deal\", \"agreed\"), even if it then adds details.",
+    "question": "Its main point is asking something about the design. An utterance that answers a question is not a question.",
+    "undo": "The speaker retracts something they themselves said (\"scratch that\", \"forget what I said\", \"ignore that\").",
+    "chit_chat": "Not about the design at all: audio/video checks, coffee, greetings, logistics, people leaving or coming "
+                 "back, small talk, pure facilitation without design content (\"let's park that\", \"let's wrap up\").",
+}
+JEV_REFERS_KINDS = {"correction", "disagreement", "resolution", "undo"}
+JEV_TOPIC_SHIFT_THRESHOLD = 0.5
+JEV_SPEECH_NOTE = ("Automatic speech recognition of someone thinking out loud: ignore fillers, false starts and "
+                   "fragments. A speaker fixing their own earlier statement is a correction, not a disagreement.")
+
+_jev_client: AsyncTypeSafeClient | None = None
+
+
+def jev_client() -> AsyncTypeSafeClient:
+    global _jev_client
+    if _jev_client is None:
+        _jev_client = AsyncTypeSafeClient(api_key=os.getenv("JEV_API_KEY"), model=JEV_MODEL,
+                                          retry=RetryPolicy(max_retries=1, timeout=15))
+    return _jev_client
+
+
+def build_jev_request(meeting: dict, context: list[dict], utt: dict) -> tuple[dict, dict]:
+    """state + questions (kind, refers_to, topic_shift) for one Jev System One call."""
+    ctx = context[-6:]
+    state: dict[str, Any] = {
+        "meeting": {"title": meeting["title"], "topic": meeting["topic"], "participants": _participants(meeting)},
+        "context": [_line(u) for u in ctx],
+        "new_utterance": _line(utt),
+    }
+    if is_live_speech(meeting):
+        state["speech_note"] = JEV_SPEECH_NOTE
+    questions: dict[str, Any] = {
+        "kind": Choice(instructions="Classify `new_utterance` in this design meeting (use `context` for what came "
+                                    "before). Pick the one kind that is its main point.",
+                       criteria=JEV_KIND_CRITERIA),
+        "topic_shift": Noul(
+            instructions="Does `new_utterance` explicitly move the discussion to a different diagram or subject?",
+            criteria={"true": "The speaker explicitly switches to another diagram or subject (\"let me switch gears "
+                              "and map the systems behind it\", \"now let's look at who the stakeholders are\").",
+                      "false": "It continues the current discussion. Mentioning a system, service or detail inside "
+                               "the current discussion is NOT a topic shift. Opening the meeting is NOT a topic shift."}),
+    }
+    if ctx:
+        questions["refers_to"] = Choice(
+            instructions="Which line of `context` does `new_utterance` react to (correct, object to, agree with, "
+                         "retract or answer)? Pick a line only if `new_utterance` is about the same thing that line "
+                         "says; a line that merely mentions a related subject does not count.",
+            criteria={**{u["id"]: _line(u) for u in ctx},
+                      "none": "It does not react to any line of `context` (for example it corrects something said "
+                              "earlier than `context`)."})
+    return state, questions
+
+
+def jev_to_extraction(utt: dict, kind: str, refers_to: str | None, topic_shift_p: float) -> dict:
+    """Map Jev answers to the Claude extractor's shape."""
+    if kind not in KINDS:
+        kind = "new_info"
+    return {"kind": kind,
+            "claims": [] if kind == "chit_chat" else [utt["text"]],
+            "refers_to": refers_to if kind in JEV_REFERS_KINDS and refers_to not in (None, "none") else None,
+            "topic_shift": topic_shift_p >= JEV_TOPIC_SHIFT_THRESHOLD}
+
+
+async def extract_jev(meeting: dict, context: list[dict], utt: dict) -> CallResult:
+    start = time.perf_counter()
+    try:
+        state, questions = build_jev_request(meeting, context, utt)
+        resp = await jev_client().system_one(state=state, questions=questions)
+        ms = int((time.perf_counter() - start) * 1000)
+        kind = resp.choices["kind"]
+        ref = resp.choices["refers_to"].choice if "refers_to" in questions else None
+        data = jev_to_extraction(utt, kind.choice, ref, resp.nouls["topic_shift"].noul)
+        return CallResult(data, ms, resp.usage.input_tokens or 0, resp.usage.output_tokens or 0,
+                          confidence=round(kind.confidence, 3))
+    except Exception as exc:  # network, auth, bad answer: never crash the live loop
+        ms = int((time.perf_counter() - start) * 1000)
+        log.warning("extraction (jev) failed after %sms: %s", ms, type(exc).__name__)
+        return CallResult(None, ms, error=f"{type(exc).__name__}: {str(exc)[:200]}")
 
 
 # ======================================================================== Modeller
@@ -300,7 +413,8 @@ async def model(meeting: dict, board_compact: dict, window: list[dict], new_item
                                     first_board=FIRST_BOARD_LIVE if live else FIRST_BOARD_SCRIPTED,
                                     speech_notes=MODELLER_SPEECH_NOTES if live else "")
     user = build_modeller_user(board_compact, window, new_items)
-    res = await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT)
+    res = await call_json("board_ops", system, user, MODELLER_SCHEMA, MODELLER_EFFORT,
+                          model=MODELLER_MODEL, thinking=MODELLER_THINKING)
     res.data = _clean_ops(res.data)
     return res
 
@@ -352,9 +466,14 @@ async def analyse(meeting: dict, transcript: list[dict], board_compact: dict,
 async def warmup() -> None:
     """Open the HTTP connection early so the first live call is not slower."""
     try:
-        await asyncio.wait_for(client().models.retrieve(MODEL), timeout=10)
+        await asyncio.wait_for(client().models.retrieve(MODELLER_MODEL), timeout=10)
     except Exception:
         pass
+    if EXTRACTOR_BACKEND == "jev":
+        try:
+            await asyncio.wait_for(jev_client().models.list(), timeout=10)
+        except Exception:
+            pass
 
 
 def jsonable(x: Any) -> Any:

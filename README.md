@@ -40,9 +40,12 @@ curl -XPOST localhost:8010/api/control -d '{"cmd":"start","mode":"live","speed":
 ```
 
 Optional env vars: `LW_MODEL` (default `claude-sonnet-5-5`), `LW_EXTRACTOR_EFFORT` (`low`), `LW_MODELLER_EFFORT` (`low`),
-`LW_ANALYST_EFFORT` (`low`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
+`LW_ANALYST_EFFORT` (`low`). `LW_MODELLER_MODEL` / `LW_EXTRACTOR_MODEL` (default `LW_MODEL`) and `LW_MODELLER_THINKING` / `LW_EXTRACTOR_THINKING` (`adaptive`; `disabled` on Haiku, `between_tools` on Sonnet) tune each agent alone. `LW_EXTRACTOR_BACKEND=jev` swaps the extractor to TypeSafe Jev (key in `.env` as `JEV_API_KEY`, model `LW_JEV_MODEL`, default `jev-latest`). Talk live: `LW_STT_MODEL` (default `gpt-live-transcribe`), `LW_STT_SEGMENTATION`
 (`local`/`server`, default picked from the model), `LW_VAD_SILENCE_MS` (`700`), `LW_VAD_MIN_RMS` (`220`),
 `LW_STT_NOISE_REDUCTION` (`far_field`, `near_field` or `none`), `LW_STT_LANGUAGE` (`en`).
+
+Fastest setup measured on the mock meeting (~2.1 s utterance to board ops vs ~4.4 s default, same score):
+`LW_EXTRACTOR_BACKEND=jev LW_MODELLER_MODEL=claude-haiku-5-5 LW_MODELLER_THINKING=disabled uv run uvicorn server:app --port 8010`
 
 ## Architecture
 
