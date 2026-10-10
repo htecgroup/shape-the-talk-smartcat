@@ -96,6 +96,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 16px 8px; }
 .panel-head.small { padding: 10px 14px 6px; }
+.panel-head .head-right { display: inline-flex; align-items: baseline; gap: 8px; }
+.meeting.focus .mic-fields, .meeting.focus .mic-hint, .meeting.focus .participants { display: none; }
+.meeting.focus .transcript { font-size: 1.08em; }
 .panel-head h2 { margin: 0; font-size: 15px; }
 .panel-head h3 { margin: 0; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); }
 .sub { color: var(--muted); font-size: 12px; }
@@ -141,6 +144,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .rec-listening .dot { background: #e03131; animation: blink 1.1s infinite; box-shadow: 0 0 0 3px rgba(224, 49, 49, .18); }
 .rec-connecting .dot, .rec-stopping .dot { background: #f59f00; animation: blink .6s infinite; }
 .rec-connecting, .rec-stopping { color: #946200; }
+.rec-muted { color: var(--muted); }
+.rec-muted .dot { background: #adb5bd; }
 .rec-error { color: var(--bad); }
 .rec-error .dot { background: var(--bad); }
 .meter { flex: 1; height: 8px; border-radius: 99px; background: #ece9e1; overflow: hidden; }

@@ -131,6 +131,12 @@ class MicSource:
         if self.state != "stopped":
             await self._set_state("stopped")   # tells the browser that owns the mic to stop capturing
 
+    def rearm(self) -> None:
+        """Make a stopped source reusable (continue after Stop). Keeps the id counter and items."""
+        self.done = asyncio.Event()
+        self.state = "idle"
+        self.error = None
+
     def public_state(self) -> dict:
         model = self.tr.model if self.tr else None
         seg = self.tr.segmentation if self.tr else None

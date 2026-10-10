@@ -207,6 +207,20 @@ class Session(AgentPipeline):
         await self.emit_status()
         return {"ok": True, "mode": self.mode, "replay": self.replay_name}
 
+    async def continue_mic(self) -> dict:
+        """Talk live: reopen the mic after Stop and keep adding to the same board."""
+        if self.mode != "mic" or self.status != "finished" or not isinstance(self.source, MicSource):
+            return {"ok": False, "error": "nothing to continue; press Start talking"}
+        self.source.rearm()                 # same source, so utterance ids keep counting (m001, m002, ...)
+        self.speech_done = False
+        self.pending_event = asyncio.Event()
+        self.t0 = time.perf_counter() - (self.timeline[-1]["t"] if self.timeline else 0.0)  # no idle gap in replay
+        self.status = "running"
+        self._tasks = [asyncio.create_task(self._run_source(announce=False)),
+                       asyncio.create_task(self._modeller_worker())]
+        await self.emit_status()
+        return {"ok": True, "mode": self.mode}
+
     async def pause(self) -> None:
         if self.status == "running" and self.mode != "mic":   # you cannot pause someone talking
             self.clock.pause()
@@ -254,10 +268,11 @@ class Session(AgentPipeline):
             pass
 
     # ------------------------------------------------------------------ live
-    async def _run_source(self) -> None:
+    async def _run_source(self, announce: bool = True) -> None:
         try:
-            asyncio.create_task(agents.warmup())
-            await self.emit({"type": "meeting", "meeting": self._meeting_public()})
+            if announce:
+                asyncio.create_task(agents.warmup())
+                await self.emit({"type": "meeting", "meeting": self._meeting_public()})
             await self.source.run(self)
         except asyncio.CancelledError:
             return

@@ -414,8 +414,18 @@
     const btn = $("btnStart");
     $("micRec").className = `rec rec-${st}`;
     $("micStateText").textContent = MIC_TEXT[st] || st;
-    $("micName").disabled = $("micTopic").disabled = running;
-    if (!running) { btn.disabled = false; btn.textContent = "🎙 Start talking"; return; }
+    $("micName").disabled = $("micTopic").disabled = running || canContinue();
+    const canMute = st === "listening" && S.micOwner && Mic.active;
+    const muted = canMute && Mic.muted;
+    $("btnMute").hidden = !canMute;
+    $("btnMute").textContent = muted ? "🎙 Unmute" : "🔇 Mute";
+    if (muted) { $("micRec").className = "rec rec-muted"; $("micStateText").textContent = "Muted"; }
+    if (!running) {
+      btn.disabled = false;
+      btn.textContent = canContinue() ? "🎙 Continue talking" : "🎙 Start talking";
+      if (canContinue()) $("micStateText").textContent = "Stopped · board kept";
+      return;
+    }
     if (st === "error") { btn.disabled = false; btn.textContent = "↻ Reconnect mic"; return; }
     if (st === "stopping") { btn.disabled = true; btn.textContent = "Finishing…"; return; }
     if (st === "connecting" || st === "listening") {
@@ -433,10 +443,13 @@
     $("micLevel").classList.toggle("hot", pct > 92);
   }
 
+  // a stopped talk-live session can be continued on the same board (Reset starts fresh)
+  function canContinue() { return S.mode === "mic" && S.status === "finished" && S.utts.size > 0; }
+
   async function micClick() {
     const running = S.status === "running";
     if (running && (S.mic.state === "listening" || S.mic.state === "connecting")) { Mic.stop(); return; }
-    const resume = running && S.mic.state === "error";
+    const resume = (running && S.mic.state === "error") || canContinue();
     const speaker = $("micName").value.trim() || "You";
     const topic = $("micTopic").value.trim();
     store.set("lw.micName", $("micName").value.trim()); store.set("lw.micTopic", topic);
@@ -479,12 +492,32 @@
   $("micName").value = store.get("lw.micName") || "";
   $("micTopic").value = store.get("lw.micTopic") || "";
   $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
-  $("btnReset").addEventListener("click", () => send({ cmd: "reset" }));
+  $("btnReset").addEventListener("click", () => {
+    if (S.utts.size > 0 && S.mode !== "replay" && !confirm("Clear the whiteboard and transcript and start fresh?")) return;
+    send({ cmd: "reset" });
+  });
+  function toggleMute() {
+    if ($("btnMute").hidden) return;
+    Mic.setMuted(!Mic.muted);
+    updateMicUI();
+  }
+  $("btnMute").addEventListener("click", toggleMute);
+  // Focus: hide setup fields, hint and participants so the transcript gets the space (remembered per browser)
+  function setFocus(on) {
+    document.querySelector(".panel.meeting").classList.toggle("focus", on);
+    $("btnFocus").textContent = on ? "⤓ Show details" : "⤒ Focus";
+    store.set("lw.focus", on ? "1" : "");
+  }
+  $("btnFocus").addEventListener("click", () => setFocus(!document.querySelector(".panel.meeting").classList.contains("focus")));
+  setFocus(store.get("lw.focus") === "1");
   $("btnTidy").addEventListener("click", () => Board.tidy());
   $("btnFit").addEventListener("click", () => Board.fit());
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
-    if (S.mode === "mic") return;        // no space-bar shortcut while talking live
+    if (S.mode === "mic") {              // no space-bar shortcut while talking live; M toggles mute
+      if (e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }
+      return;
+    }
     if (e.code === "Space") { e.preventDefault(); if (S.status === "running" || S.status === "paused") $("btnPause").click(); else $("btnStart").click(); }
   });
 

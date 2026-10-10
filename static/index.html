@@ -50,7 +50,7 @@
   <main class="layout">
     <!-- Meeting panel -->
     <section class="panel meeting">
-      <div class="panel-head"><h2>Meeting</h2><span class="sub" id="uttCount">0 / 0</span></div>
+      <div class="panel-head"><h2>Meeting</h2><span class="head-right"><span class="sub" id="uttCount">0 / 0</span><button id="btnFocus" class="btn ghost tiny" title="Hide setup and participants to focus on the transcript">⤒ Focus</button></span></div>
       <div class="micbox" id="micBox" hidden>
         <div class="mic-fields">
           <label>Your name<input id="micName" maxlength="40" placeholder="You" autocomplete="off"></label>
@@ -59,6 +59,7 @@
         <div class="mic-row">
           <span class="rec" id="micRec"><span class="dot"></span><span id="micStateText">Mic off</span></span>
           <div class="meter" title="Microphone level"><div id="micLevel"></div></div>
+          <button id="btnMute" class="btn ghost tiny" title="Mute your mic while others talk (M)" hidden>🔇 Mute</button>
         </div>
         <div class="mic-err" id="micErr" hidden></div>
         <div class="mic-hint" id="micHint">Speak in English, in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>

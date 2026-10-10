@@ -112,6 +112,7 @@ async def mic_endpoint(ws: WebSocket) -> None:
     """Talk-live audio in. Protocol:
 
     client -> server  text   {"type": "start", "speaker": "You", "topic": "...", "resume": false}
+                             resume: true reconnects after an upstream error or continues a stopped session
                       binary PCM16 LE mono 24 kHz chunks (any size; the browser sends ~50 ms)
                       text   {"type": "stop"}            flush the last utterance and finish the session
     server -> client  text   {"type": "mic_state", "state": connecting|listening|stopping|stopped|error, "error": ...}
@@ -146,6 +147,12 @@ async def mic_endpoint(ws: WebSocket) -> None:
                 cur = s.source if isinstance(s.source, MicSource) else None
                 if data.get("resume") and cur and s.status == "running" and cur.state in ("error", "idle"):
                     mic = cur                       # reconnect after an upstream error, same board
+                elif data.get("resume") and cur and s.mode == "mic" and s.status == "finished":
+                    res = await s.continue_mic()    # continue after Stop, same board
+                    if not res.get("ok"):
+                        await refuse(res.get("error", "could not continue"))
+                        continue
+                    mic = cur
                 elif cur and s.status == "running" and cur.state in ("connecting", "listening", "stopping"):
                     await refuse("Another browser is already talking live. Stop it or press Reset.")
                     continue

@@ -168,6 +168,36 @@ def test_mic_interim_final_order_and_pipeline(fake_pipeline):
     assert recording.list_runs()[0]["source"] == "mic"
 
 
+def test_mic_continue_after_stop_keeps_board(fake_pipeline):
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        await mic.handle_event(completed("itA", "The customer opens the app."))
+        await wait_for(lambda: s.board.version >= 1 and not s.pending)
+        await mic.stop()
+        await wait_for(lambda: s.status == "finished")
+        first_file = s.run_file
+
+        assert not (await Session().continue_mic())["ok"]                  # nothing to continue on a fresh session
+        res = await s.continue_mic()
+        assert res["ok"] and s.status == "running" and s.source is mic
+        assert await mic.connect() and mic.state == "listening"
+        await mic.handle_event(completed("itB", "Then checkout."))
+        assert [u["id"] for u in s.spoken] == ["m001", "m002"]             # ids keep counting
+        await wait_for(lambda: not s.pending and "n_m002" in s.board.boards[s.board.active]["nodes"])
+        await mic.stop()
+        await wait_for(lambda: s.status == "finished")
+        assert set(s.board.boards[s.board.active]["nodes"]) == {"n_m001", "n_m002"}
+        assert s.run_file == first_file                                     # same run file, saved again
+        assert [e["type"] for e in s.timeline].count("meeting") == 1
+        return s.run_file
+
+    run_file = asyncio.run(run())
+    saved = json.loads((recording.RUNS_DIR / run_file).read_text())
+    assert [e["id"] for e in saved["events"] if e["type"] == "utterance_final"] == ["m001", "m002"]
+    assert len(list(recording.RUNS_DIR.glob("*.json"))) == 1
+
+
 def test_mic_vad_commits_and_stop_flushes_last_utterance(fake_pipeline):
     async def run():
         s = Session()

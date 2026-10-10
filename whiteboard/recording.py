@@ -49,7 +49,8 @@ def save_run(s: Session, complete: bool) -> str | None:
     if not s.timeline:
         return None
     RUNS_DIR.mkdir(exist_ok=True)
-    name = datetime.now().strftime("%Y-%m-%dT%H-%M-%S") + ("" if complete else "_partial") + ".json"
+    # a continued talk-live session saves again into its own file (the timeline is cumulative)
+    name = s.run_file or datetime.now().strftime("%Y-%m-%dT%H-%M-%S") + ("" if complete else "_partial") + ".json"
     stats = agent_latency(s.timeline)
     if s.utt_timing:
         stats["mic"] = mic_latency(s.utt_timing)

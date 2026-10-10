@@ -3,10 +3,12 @@
  *
  * Mic.start({speaker, topic, resume}, {onState, onLevel, onError}) -> Promise<boolean>
  * Mic.stop()   asks the server to flush the last utterance; capture stops immediately.
+ * Mic.setMuted(on)  silences the track: silence keeps streaming, so the server's VAD closes the
+ *                   current utterance and the upstream session stays alive. No reconnect on unmute.
  */
 const Mic = (() => {
   let stream = null, ctx = null, node = null, src = null, sink = null, ws = null;
-  let h = {}, active = false, stopTimer = null;
+  let h = {}, active = false, stopTimer = null, muted = false;
 
   const supported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.AudioWorkletNode);
 
@@ -70,8 +72,14 @@ const Mic = (() => {
     stopTimer = setTimeout(closeSocket, 10000);      // the server answers with state "stopped"
   }
 
+  function setMuted(on) {
+    muted = !!on && active;
+    if (stream) stream.getAudioTracks().forEach((t) => { t.enabled = !muted; });   // a disabled track yields silence
+  }
+
   function release() {
     active = false;
+    muted = false;
     try { node && (node.port.onmessage = null); } catch { /* ignore */ }
     try { src && src.disconnect(); node && node.disconnect(); sink && sink.disconnect(); } catch { /* ignore */ }
     if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -91,5 +99,5 @@ const Mic = (() => {
   // Tab closing: closing the socket makes the server flush and close the upstream session.
   window.addEventListener("pagehide", () => { if (ws) ws.close(); });
 
-  return { start, stop, supported, get active() { return active; } };
+  return { start, stop, setMuted, supported, get active() { return active; }, get muted() { return muted; } };
 })();
