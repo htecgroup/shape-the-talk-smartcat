@@ -25,7 +25,7 @@ Then open:
 | http://localhost:8010/?replay=latest | **Replay**: autoplays the newest complete recorded run (simulated or talk-live) with **no API calls** (demo fallback). `?replay=<file>.json` plays a specific one |
 
 Controls: the Simulated / Talk live / Replay toggle, Start, Pause/Resume (also the space bar), speed 1×/2×/4×, Reset, the Live/Replay toggle plus a run picker,
-board tabs, ✨ Tidy (a full dagre re-layout on demand), ⤢ Fit, and drag/scroll to pan and zoom. Hover a node for its note, status and who changed it.
+board tabs, ✨ Tidy (a full flow re-layout on demand), ⤢ Fit, and drag/scroll to pan and zoom. Hover a node for its note, status and who changed it.
 
 `ANTHROPIC_API_KEY` (agents) and `OPENAI_API_KEY` (Talk live transcription and the test-audio script only) are read from `.env` and never logged.
 
@@ -123,7 +123,7 @@ data/meeting_freshbite.json ──► Meeting simulator (virtual clock: speed, p
   `resolved` = green ✓ badge with the agreed decision in the tooltip.
 - Changed elements glow briefly in the **colour of the speaker who caused the change**, with a name chip. A toast shows the modeller's one-line summary.
 - **Stable layout:** a new node is placed next to the node it is connected to, and existing nodes never move. When a row is full, the flow
-  drops a row and continues in the other direction (snake layout), which keeps edges short. ✨ Tidy runs dagre only when you ask for it.
+  drops a row and continues in the other direction (snake layout), which keeps edges short. ✨ Tidy runs a full layered re-layout (flow order, groups kept together, long flows wrap to fit the panel) only when you ask for it, or after the consolidator restructured a board; nodes glide to their new places.
 
 ## Model findings (gpt-6-luna, measured 2026-10-02; the agents have since moved to `claude-sonnet-5-5`)
 
@@ -185,7 +185,7 @@ Five full live runs were used to tune the prompts. Problems found and how each w
 - Batching: when utterances arrive faster than the modeller (4× speed), several are modelled in one call. That is correct, but an
   utterance retracted within the same batch is simply never drawn, so the undo animation is not visible.
 - The analyst works from the transcript and can briefly disagree with the board. Its dispute marks are guarded: stale marks are rejected, and it can only open or close disputes.
-- Incremental layout is heuristic. Branch-heavy boards can get crossing edges. ✨ Tidy (dagre) fixes this, but then every node moves.
+- Incremental layout is heuristic. Branch-heavy boards can get crossing edges. ✨ Tidy fixes this, but then every node moves (animated).
 - Replay timing is the recorded wall-clock time (agent latency included); the speed buttons scale it. If a recording is made at 2×, then replay at 1× is the same pace as live at 2×.
 - On page reload the layout is computed from the final state in one pass, so it can differ slightly from the live incremental layout.
 - Single global session (one meeting at a time for every connected browser), no auth, no persistence across meetings, no MCP surface yet.

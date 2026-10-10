@@ -183,8 +183,25 @@
   }
 
   // ------------------------------------------------------------------ board
+  // consolidator ops that change the structure enough to warrant a full re-layout
+  const RESTRUCTURE = new Set(["add_group", "set_group", "remove_node", "reroute"]);
+  function restructured(ev) {
+    if (ev.agent !== "consolidator") return false;
+    const ops = ev.applied || [];
+    return ops.some((o) => RESTRUCTURE.has(o.op)) || ops.filter((o) => o.op === "connect" || o.op === "disconnect").length > 2;
+  }
+  const shapeSig = (b) => JSON.stringify([
+    Object.keys(b.nodes).sort().map((id) => `${id}@${b.nodes[id].group || ""}`),
+    Object.values(b.edges).map((e) => `${e.from}>${e.to}`).sort(),
+  ]);
+
   function onBoard(ev) {
     const state = ev.board;
+    if (restructured(ev)) {
+      // re-lay out every board whose shape changed (the visible one now, others when shown)
+      const before = new Map(((S.board && S.board.boards) || []).map((b) => [b.id, shapeSig(b)]));
+      Board.relayout(state.boards.filter((b) => before.get(b.id) !== shapeSig(b)).map((b) => b.id));
+    }
     S.board = state;
     const ids = state.boards.map((b) => b.id);
     const fresh = ids.filter((id) => !S.knownBoards.has(id));
