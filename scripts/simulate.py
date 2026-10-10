@@ -1,12 +1,14 @@
 """Headless live run: replays the mock meeting through the real agents, saves a run, prints the boards.
 
 uv run python scripts/simulate.py --speed 4
+uv run python scripts/simulate.py --meeting standup     # data/meeting_standup.json (same as LW_MEETING=standup)
 """
 
 import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -28,7 +30,14 @@ def describe(path: Path) -> None:
         print(f"\n## {b['title']} ({b['kind']}, id={b['id']})")
         for n in b["nodes"].values():
             extra = f"  [{n['status']}: {n.get('note')}]" if n["status"] != "confirmed" else (f"  ({n['note']})" if n.get("note") else "")
-            print(f"  - {n['id']:<22} {n['type']:<8} {n['label']}{extra}  <{n['by']} {n['src']}>")
+            task = ""
+            if n["type"] == "task":
+                task = f"  [{'x' if n.get('done') else ' '}]" + (f" @{n['assignee']}" if n.get("assignee") else "")
+            group = f"  in {n['group']}" if n.get("group") else ""
+            print(f"  - {n['id']:<22} {n['type']:<8} {n['label']}{task}{group}{extra}  <{n['by']} {n['src']}>")
+        for g in b["groups"].values():
+            kind = "task list" if g.get("kind") == "task_list" else "group"
+            print(f"  ▢ {g['id']:<22} {kind} “{g['label']}”" + (f" owned by {g['owner']}" if g.get("owner") else ""))
         for e in b["edges"].values():
             extra = f"  [{e['status']}]" if e["status"] != "confirmed" else ""
             print(f"    {e['from']} -> {e['to']}" + (f"  '{e['label']}'" if e.get("label") else "") + extra)
@@ -54,7 +63,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--speed", type=float, default=4)
     ap.add_argument("--describe", help="only print an existing run file")
+    ap.add_argument("--meeting", help="scripted meeting: a name (standup -> data/meeting_standup.json) or a .json path")
     a = ap.parse_args()
+    if a.meeting:
+        os.environ["LW_MEETING"] = a.meeting
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if a.describe:

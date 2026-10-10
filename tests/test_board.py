@@ -268,3 +268,146 @@ def test_layout_plan_is_validated_and_stored_on_the_board():
     assert s.set_layout("nope", raw) is None and s.set_layout("flow", "spine") is None
     fallback = s.set_layout("flow", {"direction": "diagonal", "spine": ["bank"], "placements": [], "groups": []})
     assert fallback["direction"] == "LR" and fallback["spine"] == []         # a spine needs two entries
+
+
+# ------------------------------------------------------------------ tasks
+def task_board():
+    s = BoardState()
+    r = s.apply_ops([
+        {"op": "new_board", "id": "plan", "title": "Launch plan", "kind": "process", "src": "u1"},
+        {"op": "add_node", "id": "ivan", "label": "Ivan", "type": "actor", "src": "u1"},
+        {"op": "add_task_list", "id": "launch", "label": "Launch checklist", "src": "u1"},
+        {"op": "add_node", "id": "api_spec", "label": "Draft API spec", "type": "task",
+         "group": "launch", "assignee": "ivan", "src": "u1"},
+    ], by_lookup=BY)
+    assert not r["rejected"], r["rejected"]
+    return s
+
+
+def test_task_links_to_an_existing_actor():
+    s = task_board()
+    assert nodes(s)["api_spec"]["assignee"] == "ivan"
+    assert s.boards["plan"]["groups"]["launch"]["kind"] == "task_list"
+    compact = s.compact()["boards"][0]
+    assert {"id": "launch", "label": "Launch checklist", "kind": "task_list"} in compact["groups"]
+    assert next(n for n in compact["nodes"] if n["id"] == "api_spec")["assignee"] == "ivan"
+
+
+def test_task_assignee_that_is_not_an_actor_is_left_out():
+    s = task_board()
+    r = s.apply_ops([
+        {"op": "add_node", "id": "venue", "label": "Book venue", "type": "task", "assignee": "marko", "src": "u2"},
+        {"op": "add_node", "id": "deploy", "label": "Deploy", "type": "step", "assignee": "ivan", "src": "u2"},
+    ], by_lookup=BY)
+    assert not r["rejected"]
+    assert "assignee" not in nodes(s)["venue"] and "assignee" not in nodes(s)["deploy"]
+
+
+def test_assign_sets_and_clears_and_checks_the_actor():
+    s = task_board()
+    r = s.apply_ops([
+        {"op": "add_node", "id": "marko", "label": "Marko", "type": "actor", "src": "u2"},
+        {"op": "assign", "node": "api_spec", "assignee": "marko", "src": "u2"},
+    ], by_lookup=BY)
+    assert not r["rejected"] and nodes(s)["api_spec"]["assignee"] == "marko"
+    r = s.apply_ops([
+        {"op": "assign", "node": "api_spec", "assignee": "launch", "src": "u3"},   # a group, not an actor
+        {"op": "assign", "node": "ivan", "assignee": "marko", "src": "u3"},        # not a task
+    ], by_lookup=BY)
+    assert len(r["rejected"]) == 2
+    r = s.apply_ops([{"op": "assign", "node": "api_spec", "assignee": "", "src": "u4"}], by_lookup=BY)
+    assert not r["rejected"] and "assignee" not in nodes(s)["api_spec"]
+
+
+def test_task_list_holds_tasks_only():
+    s = task_board()
+    r = s.apply_ops([
+        {"op": "add_node", "id": "crm", "label": "CRM", "type": "system", "group": "launch", "src": "u2"},
+        {"op": "set_group", "node": "ivan", "group": "launch", "src": "u2"},
+        {"op": "update_node", "id": "api_spec", "type": "step", "src": "u2"},
+    ], by_lookup=BY)
+    assert [x["op"]["op"] for x in r["rejected"]] == ["add_node", "set_group", "update_node"]
+
+
+def test_removing_the_actor_unassigns_its_tasks_and_undo_restores():
+    s = task_board()
+    r = s.apply_ops([{"op": "remove_node", "id": "ivan", "src": "u2"}], by_lookup=BY)
+    assert not r["rejected"] and "assignee" not in nodes(s)["api_spec"]
+    s.undo_last()
+    assert nodes(s)["api_spec"]["assignee"] == "ivan"
+    r = s.apply_ops([{"op": "update_node", "id": "ivan", "type": "system", "src": "u3"}], by_lookup=BY)
+    assert not r["rejected"] and "assignee" not in nodes(s)["api_spec"]
+
+
+def test_assigned_task_moves_into_the_persons_list_and_back():
+    s = task_board()
+    g = s.boards["plan"]["groups"]
+    # api_spec was added to the shared launch list with assignee ivan: it went to Ivan's own list instead
+    assert nodes(s)["api_spec"]["group"] == "ivan_tasks"
+    assert g["ivan_tasks"] == {**g["ivan_tasks"], "label": "Ivan's tasks", "kind": "task_list", "owner": "ivan"}
+    r = s.apply_ops([
+        {"op": "add_node", "id": "venue", "label": "Book venue", "type": "task", "group": "launch", "src": "u2"},
+        {"op": "add_node", "id": "ana", "label": "Ana", "type": "actor", "src": "u2"},
+        {"op": "assign", "node": "venue", "assignee": "ana", "src": "u2"},
+    ], by_lookup=BY)
+    assert not r["rejected"], r["rejected"]
+    assert nodes(s)["venue"]["group"] == "ana_tasks" and g["ana_tasks"]["owner"] == "ana"
+    # re-assigning moves it to the other person's list; un-assigning puts it back into the shared list
+    s.apply_ops([{"op": "assign", "node": "venue", "assignee": "ivan", "src": "u3"}], by_lookup=BY)
+    assert nodes(s)["venue"]["group"] == "ivan_tasks"
+    s.apply_ops([{"op": "assign", "node": "venue", "assignee": "", "src": "u4"}], by_lookup=BY)
+    assert nodes(s)["venue"]["group"] == "launch" and "assignee" not in nodes(s)["venue"]
+    s.undo_last()
+    assert nodes(s)["venue"]["group"] == "ivan_tasks" and nodes(s)["venue"]["assignee"] == "ivan"
+
+
+def test_a_persons_task_list_owns_its_tasks():
+    s = task_board()
+    r = s.apply_ops([
+        {"op": "add_node", "id": "ana", "label": "Ana", "type": "actor", "src": "u2"},
+        {"op": "add_task_list", "id": "ana_list", "label": "Ana's list", "owner": "ana", "src": "u2"},
+        {"op": "add_node", "id": "venue", "label": "Book venue", "type": "task", "group": "ana_list", "src": "u2"},
+        {"op": "set_group", "node": "api_spec", "group": "ana_list", "src": "u2"},
+        {"op": "add_node", "id": "flyer", "label": "Print flyers", "type": "task", "assignee": "ana", "src": "u2"},
+    ], by_lookup=BY)
+    assert not r["rejected"], r["rejected"]
+    assert nodes(s)["venue"]["assignee"] == "ana" and nodes(s)["api_spec"]["assignee"] == "ana"
+    assert nodes(s)["flyer"]["group"] == "ana_list"          # her existing list, no second one
+    r = s.apply_ops([{"op": "set_group", "node": "venue", "group": "launch", "src": "u3"}], by_lookup=BY)
+    assert not r["rejected"] and "assignee" not in nodes(s)["venue"]   # back on the shared list: unassigned
+
+
+def test_assigning_an_existing_list_to_a_person_assigns_its_tasks():
+    s = task_board()
+    r = s.apply_ops([
+        {"op": "add_node", "id": "venue", "label": "Book venue", "type": "task", "group": "launch", "src": "u2"},
+        {"op": "add_node", "id": "ana", "label": "Ana", "type": "actor", "src": "u2"},
+        {"op": "assign", "node": "launch", "assignee": "ana", "src": "u2"},
+    ], by_lookup=BY)
+    assert not r["rejected"], r["rejected"]
+    assert s.boards["plan"]["groups"]["launch"]["owner"] == "ana" and nodes(s)["venue"]["assignee"] == "ana"
+    s.apply_ops([{"op": "remove_node", "id": "ana", "src": "u3"}], by_lookup=BY)
+    assert "owner" not in s.boards["plan"]["groups"]["launch"] and "assignee" not in nodes(s)["venue"]
+    s.undo_last()
+    assert s.boards["plan"]["groups"]["launch"]["owner"] == "ana" and nodes(s)["venue"]["assignee"] == "ana"
+
+
+def test_unknown_list_owner_is_left_out():
+    s = task_board()
+    r = s.apply_ops([{"op": "add_task_list", "id": "misc", "label": "Misc", "owner": "nobody", "src": "u2"}], by_lookup=BY)
+    assert not r["rejected"] and "owner" not in s.boards["plan"]["groups"]["misc"]
+
+
+def test_completed_task_stays_on_the_board_checked():
+    s = task_board()
+    r = s.apply_ops([{"op": "complete_task", "node": "api_spec", "src": "u2"}], by_lookup=BY)
+    assert not r["rejected"]
+    assert nodes(s)["api_spec"]["done"] is True and nodes(s)["api_spec"]["group"] == "ivan_tasks"
+    assert next(n for n in s.compact()["boards"][0]["nodes"] if n["id"] == "api_spec")["done"] is True
+    r = s.apply_ops([
+        {"op": "complete_task", "node": "api_spec", "src": "u3"},   # already done
+        {"op": "complete_task", "node": "ivan", "src": "u3"},       # not a task
+    ], by_lookup=BY)
+    assert len(r["rejected"]) == 2
+    r = s.apply_ops([{"op": "reopen_task", "node": "api_spec", "src": "u4"}], by_lookup=BY)
+    assert not r["rejected"] and "done" not in nodes(s)["api_spec"]

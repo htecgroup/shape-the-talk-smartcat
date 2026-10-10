@@ -16,6 +16,14 @@ NODE TYPES
 - step: an action in a process. Short verb phrase ("Browse restaurants", "Assign courier").
 - decision: a yes/no branch in a process ("Payment OK?"). Only when a branch is actually described.
 - data: stored data or a data store (Payment token, Analytics warehouse).
+- task: a to-do or action item someone commits to or is asked to do, as opposed to a step of the process being described ("Ivan will draft the API spec", "we need to book the venue"). Label it as a short verb phrase ("Draft API spec").
+
+TASKS
+- assignee: the id of the actor node of the person or team who owns the task ("Ivan will ..." -> assignee "ivan"). Only an actor that is already on the board (or added earlier in the same op list); if the owner is not an actor on the board, leave assignee "" and put "owner: <Name>" in the note. Do not add actors only to assign tasks to them. Re-assigning or un-assigning later: assign (assignee "" clears it). Assignment is not an edge: never connect a task to its assignee.
+- Several tasks that belong together (a named list, the action items of one topic or phase, "the sprint backlog"): add_task_list with a short label ("Sprint backlog", "Action items") and put the tasks into it (group of add_node, or set_group). A task list holds only tasks; use add_group for anything else.
+- Every person has their own task list, next to their actor. An assigned task moves into its assignee's list automatically (the list is created when they have none), and an un-assigned one goes back to the shared list it came from. So a shared list holds only unassigned tasks. To give someone a task, just assign it (or add_node with assignee); do not set_group it yourself. A shared list that is handed over to one person as a whole ("those are all Ivan's"): assign with node = the list id and assignee = the actor.
+- Dependencies: when one task waits on another ("I'm blocked on Ivan's endpoint", "I can test it once Marko's screen is ready", "I need the changelog for the release notes"), connect the task that has to happen first -> the task that waits, label "blocks" (or "needed for" when it is an input rather than a blocker). Both ends are tasks, usually of different people; add the missing task first when it is new.
+- Done: when someone says a task is done, finished or ticked off, complete_task it. Never remove a finished task: it stays on the board, checked, as part of the plan. "Not done after all" / "reopen it": reopen_task.
 
 LABELS & IDS: labels 1-4 words; details go in note (max 12 words). ids are short snake_case nouns, unique per board (e.g. "payment_gateway"). Reuse existing ids exactly as shown in the board JSON; never add a node that already exists. Edge ids are "<from>-><to>".
 

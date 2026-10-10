@@ -8,6 +8,7 @@ const BoardShapes = (() => {
     step:     { fill: "#ffffff", stroke: "#343a40" },
     decision: { fill: "#fff0f6", stroke: "#c2255c" },
     data:     { fill: "#ebfbee", stroke: "#2b8a3e" },
+    task:     { fill: "#f3f0ff", stroke: "#6741d9" },
   };
 
   function wrap(label, max = 17) {
@@ -37,7 +38,7 @@ const BoardShapes = (() => {
     let w = Math.max(128, Math.min(236, Math.max(tw, nw) + 40));
     let h = lines.length === 1 ? 54 : 72;
     if (note) h += 14;
-    if (n.type === "actor") w += 30;
+    if (n.type === "actor" || n.type === "task") w += 30;
     if (n.type === "decision") { w += 52; h += 34; }
     if (n.type === "data") h += 16;
 
@@ -46,7 +47,7 @@ const BoardShapes = (() => {
     const stroke = disputed ? "#e03131" : ghost ? "#adb5bd" : t.stroke;
     const opts = {
       seed: hash(n.id), roughness: 1.15, bowing: 0.9, stroke, strokeWidth: disputed ? 2.6 : 1.9,
-      fill: ghost ? "#ffffff" : t.fill, fillStyle: "solid",
+      fill: ghost || n.done ? "#ffffff" : t.fill, fillStyle: "solid",
     };
     if (ghost) opts.strokeLineDash = [7, 6];
 
@@ -65,6 +66,10 @@ const BoardShapes = (() => {
       const lid = rc ? rc.path(`M${-hw},${top} A${hw},${ry} 0 0,0 ${hw},${top}`, { ...opts, fill: undefined }) : el("path", { d: `M${-hw},${top} A${hw},${ry} 0 0,0 ${hw},${top}`, fill: "none", stroke });
       const sg = el("g", { class: "shape" }); sg.appendChild(shape); sg.appendChild(lid); shape = sg;
       halo.setAttribute("d", roundedRect(w + 12, h + 12, 16));
+    } else if (n.type === "task") {
+      const d = roundedRect(w, h, 6);
+      shape = rc ? rc.path(d, opts) : el("path", { d, fill: opts.fill, stroke });
+      halo.setAttribute("d", roundedRect(w + 12, h + 12, 10));
     } else if (n.type === "actor") {
       const d = roundedRect(w, h, Math.min(hh, 26));
       shape = rc ? rc.path(d, opts) : el("path", { d, fill: opts.fill, stroke });
@@ -86,7 +91,7 @@ const BoardShapes = (() => {
     inner.appendChild(shape);
 
     // label
-    const shift = n.type === "actor" ? 13 : 0;
+    const shift = n.type === "actor" || n.type === "task" ? 13 : 0;
     const top = n.type === "system" ? 5 : 0;
     const lineH = 19;
     const startY = -((lines.length - 1) * lineH) / 2 - (note ? 7 : 0) + top;
@@ -103,6 +108,11 @@ const BoardShapes = (() => {
       el("circle", { cx: ix, cy: iy - 6, r: 5, fill: "none", stroke: c, "stroke-width": 2 }, inner);
       el("path", { d: `M${ix - 8},${iy + 11} Q${ix},${iy - 3} ${ix + 8},${iy + 11}`, fill: "none", stroke: c, "stroke-width": 2, "stroke-linecap": "round" }, inner);
     }
+    if (n.type === "task") {
+      const ix = -hw + 20, c = ghost ? "#adb5bd" : t.stroke;
+      el("rect", { x: ix - 7, y: -7, width: 14, height: 14, rx: 3, fill: n.done ? c : "#fff", stroke: c, "stroke-width": 2 }, inner);
+      if (n.done) el("path", { d: `M${ix - 4},0 L${ix - 1},3.5 L${ix + 4.5},-3.5`, fill: "none", stroke: "#fff", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }, inner);
+    }
     if (ghost) {
       const cap = el("text", { class: "node-note", x: -hw + 4, y: -hh - 7, "text-anchor": "start", "font-style": "italic" }, inner);
       cap.textContent = "proposed";
@@ -118,7 +128,7 @@ const BoardShapes = (() => {
     return { inner, w, h };
   }
 
-  function nodeSig(n) { return [n.label, n.type, n.status, n.note, n.group].join("|"); }
+  function nodeSig(n) { return [n.label, n.type, n.status, n.note, n.group, !!n.done].join("|"); }
 
   function buildEdge(e) {
     const g = el("g", { class: `edge ${e.status}` });

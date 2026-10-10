@@ -23,7 +23,7 @@
 
   Board.init({
     colorOf, onEmptyChange: (empty) => $("boardEmpty").classList.toggle("hide", !empty),
-    layoutSig: (b) => `${shapeSig(b)}|${planSig(b)}`,   // the board's shape and plan, as far as Tidy uses them
+    layoutSig: (b) => `${shapeSig(b)}|${planSig(b)}|${ownerSig(b)}`,   // the board's shape and plan, as far as Tidy uses them
   });
 
   // ------------------------------------------------------------------ socket
@@ -199,7 +199,7 @@
 
   // ------------------------------------------------------------------ board
   // consolidator ops that change the structure enough to warrant a full re-layout
-  const RESTRUCTURE = new Set(["add_group", "set_group", "remove_node", "reroute"]);
+  const RESTRUCTURE = new Set(["add_group", "add_task_list", "set_group", "remove_node", "reroute"]);
   function restructured(ev) {
     if (ev.agent !== "consolidator" && ev.agent !== "approval") return false;
     const ops = ev.applied || [];
@@ -209,6 +209,10 @@
     Object.keys(b.nodes).sort().map((id) => `${id}@${b.nodes[id].group || ""}`),
     Object.values(b.edges).map((e) => `${e.from}>${e.to}`).sort(),
   ]);
+  // which actor each task list belongs to: an owned list is laid out next to its owner
+  const ownerSig = (b) => JSON.stringify(Object.values(b.groups || {}).filter((g) => g.owner).map((g) => `${g.id}:${g.owner}`).sort());
+  // a task that changed list (assigning moves it into its assignee's list): its old place no longer fits
+  const taskMoved = (old, b) => Object.values(b.nodes).some((n) => n.type === "task" && old.nodes[n.id] && (old.nodes[n.id].group || "") !== (n.group || ""));
   // the layout plan, as far as it moves anything (an identical plan must not make the board jump)
   const planSig = (b) => {
     const L = b.layout;
@@ -225,7 +229,7 @@
     const stale = state.boards.filter((b) => {
       const old = before.get(b.id);
       if (!old) return false;
-      return (restructured(ev) && shapeSig(old) !== shapeSig(b)) || planSig(old) !== planSig(b);
+      return (restructured(ev) && shapeSig(old) !== shapeSig(b)) || planSig(old) !== planSig(b) || ownerSig(old) !== ownerSig(b) || taskMoved(old, b);
     });
     if (stale.length) Board.relayout(stale.map((b) => b.id));
     S.board = state;
@@ -272,7 +276,7 @@
     const o = op.op || "?";
     let s;
     switch (o) {
-      case "add_node": s = `+ ${op.type} “${op.label}”${op.status === "ghost" ? " (proposed)" : ""}`; break;
+      case "add_node": s = `+ ${op.type} “${op.label}”${op.assignee ? ` @${op.assignee}` : ""}${op.status === "ghost" ? " (proposed)" : ""}`; break;
       case "update_node": s = `✎ ${op.id}${op.label ? ` → “${op.label}”` : ""}${op.note ? ` note` : ""}`; break;
       case "remove_node": s = `− ${op.id}`; break;
       case "connect": s = `→ ${op.from} → ${op.to}${op.label ? ` “${op.label}”` : ""}`; break;
@@ -284,6 +288,10 @@
       case "switch_board": s = `⇄ tab ${op.board}`; break;
       case "add_group": s = `▢ group “${op.label}”`; break;
       case "set_group": s = `▢ ${op.node} ∈ ${op.group}`; break;
+      case "add_task_list": s = `☑ task list “${op.label}”${op.owner ? ` @${op.owner}` : ""}`; break;
+      case "complete_task": s = `☑ done: ${op.node}`; break;
+      case "reopen_task": s = `☐ reopened: ${op.node}`; break;
+      case "assign": s = op.assignee ? `@ ${op.node} → ${op.assignee}` : `@ ${op.node} unassigned`; break;
       default: s = JSON.stringify(op);
     }
     return esc(s) + by;

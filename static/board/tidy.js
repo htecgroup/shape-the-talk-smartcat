@@ -498,7 +498,7 @@ const BoardTidy = (() => {
     const plan = readPlan(board);
     const NO = { spine: [], place: new Map() };
     const blockRef = (id) => (groups.has(id) ? gkey(id) : board.nodes[id] ? block(id) : null);
-    const outerHint = !plan ? NO : {
+    let outerHint = !plan ? NO : {
       spine: [...new Set(plan.spine.map(blockRef).filter(Boolean))],
       place: new Map([...plan.place].filter(([u]) => groups.has(u) || (board.nodes[u] && block(u) === u))
         .map(([u, p]) => [blockRef(u), { ...p, anchor: blockRef(p.anchor) }]).filter(([u, p]) => p.anchor && u !== p.anchor)),
@@ -508,6 +508,15 @@ const BoardTidy = (() => {
       place: new Map([...plan.place].filter(([u, p]) => ms.has(u) && ms.has(p.anchor))),
     };
     const tb = !!(plan && plan.tb);
+    // a person's task list sits right below its owner (unless the plan already puts it somewhere)
+    if (board.kind !== "mindmap") {
+      for (const [g] of groups) {
+        const owner = board.groups[g].owner, at = owner && board.nodes[owner] ? block(owner) : null;
+        if (!at || at === gkey(g) || outerHint.spine.includes(gkey(g)) || outerHint.place.has(gkey(g))) continue;
+        if (outerHint === NO) outerHint = { spine: [], place: new Map() };
+        outerHint.place.set(gkey(g), { side: "below", anchor: at });
+      }
+    }
 
     /* A long back edge round the outside: out of the side of its source, along
      * the left or right of everything between its ends, into its target (or,
@@ -537,7 +546,8 @@ const BoardTidy = (() => {
         const ms = new Set(members), hint = innerHint(ms);
         const ge = edges.filter((e) => ms.has(e.from) && ms.has(e.to)).map((e) => ({ from: e.from, to: e.to, lw: lw(e) }));
         const all = [...ge, ...planEdges(members, ge, hint)];
-        const orient = (plan && plan.orient.get(g)) || (tb ? "column" : "row");
+        // a task list reads as a list (a column) unless the plan says otherwise
+        const orient = (plan && plan.orient.get(g)) || (tb || board.groups[g].kind === "task_list" ? "column" : "row");
         const res = orient === "column" ? layoutFlowTB(members.map(item), all, Infinity, hint)
           : layoutFlow(members.map(item), all, (plan && plan.orient.get(g) === "row") || tb ? Infinity : B - GPAD.l - GPAD.r, false, hint);
         inner.set(gkey(g), res);

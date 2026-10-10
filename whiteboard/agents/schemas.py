@@ -24,7 +24,7 @@ EXTRACTOR_SCHEMA = _obj({
 
 
 # ===================================================== Modeller (and consolidator)
-NODE_TYPE = {"type": "string", "enum": ["actor", "system", "step", "decision", "data"]}
+NODE_TYPE = {"type": "string", "enum": ["actor", "system", "step", "decision", "data", "task"]}
 NEW_STATUS = {"type": "string", "enum": ["confirmed", "ghost"]}
 MARK_STATUS = {"type": "string", "enum": ["confirmed", "ghost", "disputed", "resolved"]}
 
@@ -33,7 +33,7 @@ MARK_STATUS = {"type": "string", "enum": ["confirmed", "ghost", "disputed", "res
 # field required and "" meaning "not used for this op". clean_ops turns that back into the per-op
 # shape (only that op's fields, "" -> null); Board.normalize still rejects ops missing a required field.
 OP_SCHEMAS = {
-    "add_node": {"id": S, "label": S, "type": NODE_TYPE, "status": NEW_STATUS, "group": NS, "note": NS},
+    "add_node": {"id": S, "label": S, "type": NODE_TYPE, "status": NEW_STATUS, "group": NS, "note": NS, "assignee": NS},
     "update_node": {"id": S, "label": NS, "type": NODE_TYPE, "note": NS},
     "remove_node": {"id": S},
     "connect": {"from": S, "to": S, "label": NS, "status": NEW_STATUS},
@@ -41,7 +41,11 @@ OP_SCHEMAS = {
     "reroute": {"edge": S, "via": NS, "new_from": NS, "new_to": NS, "label": NS},
     "mark": {"target": S, "status": MARK_STATUS, "note": NS},
     "add_group": {"id": S, "label": S},
+    "add_task_list": {"id": S, "label": S, "owner": NS},
     "set_group": {"node": S, "group": NS},
+    "assign": {"node": S, "assignee": NS},
+    "complete_task": {"node": S},
+    "reopen_task": {"node": S},
     "new_board": {"id": S, "title": S, "kind": {"type": "string", "enum": ["process", "architecture", "stakeholder", "mindmap"]}},
     "switch_board": {"board": S},
     "undo": {"target_src": S},

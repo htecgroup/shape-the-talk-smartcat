@@ -28,6 +28,7 @@ const Board = (() => {
   const nodeEls = new Map();   // node id -> {g, inner, sig, w, h, data}
   const edgeEls = new Map();   // edge id -> {g, line, glow, labelG, data}
   const groupEls = new Map();
+  const assignLinks = new Map();   // task id -> dotted line to its assignee
   const lastSeen = new Map();  // board id -> board data last rendered
   let shown = null;            // board id currently drawn
   let shownData = null;
@@ -162,7 +163,7 @@ const Board = (() => {
   // ----------------------------------------------------------- render
   function clearAll() {
     for (const layer of [groupsLayer, edgesLayer, nodesLayer, fxLayer]) layer.replaceChildren();
-    nodeEls.clear(); edgeEls.clear(); groupEls.clear(); tweens.clear();
+    nodeEls.clear(); edgeEls.clear(); groupEls.clear(); assignLinks.clear(); tweens.clear();
   }
 
   /**
@@ -185,7 +186,8 @@ const Board = (() => {
       let ne = nodeEls.get(id);
       const k = key(board.id, id);
       const isNew = !ne;
-      const changed = ne && ne.sig !== nodeSig(n);
+      const sig = nodeSig(n);
+      const changed = ne && ne.sig !== sig;
       if (isNew || changed) {
         const { inner, w, h } = buildNode(n, rc);
         if (isNew) {
@@ -194,20 +196,20 @@ const Board = (() => {
           g.addEventListener("mouseenter", (ev) => showTip(ev, id));
           g.addEventListener("mousemove", moveTip);
           g.addEventListener("mouseleave", hideTip);
-          ne = { g, inner, w, h, sig: nodeSig(n), data: n };
+          ne = { g, inner, w, h, sig, data: n };
           nodeEls.set(id, ne);
           g.appendChild(inner);
           if (!cur.has(k) || switching) cur.set(k, { ...pos.get(k) });
           setTimeout(() => g.classList.remove("enter"), 700);
         } else {
           ne.g.replaceChild(inner, ne.inner);
-          Object.assign(ne, { inner, w, h, sig: nodeSig(n) });
+          Object.assign(ne, { inner, w, h, sig });
         }
       }
       ne.data = n;
       // keep transient animation classes (enter/flash); only swap type and status
       const transient = ["enter", "flash"].filter((c) => ne.g.classList.contains(c));
-      ne.g.setAttribute("class", ["node", n.type, n.status, ...transient,
+      ne.g.setAttribute("class", ["node", n.type, n.status, ...(n.done ? ["done"] : []), ...transient,
         ...(pending.has(key(board.id, id)) ? ["pending-remove"] : [])].join(" "));
       const prevN = prev && prev.nodes[id];
       if (!silent && (!prevN || prevN.v !== n.v || nodeSig(prevN) !== nodeSig(n))) flash(ne, flashColor(n));
@@ -284,9 +286,10 @@ const Board = (() => {
       if (!members.length) { if (ge) ge.style.display = "none"; continue; }
       if (!ge) {
         ge = el("g", { class: "group" }, groupsLayer);
-        el("rect", { rx: 18 }, ge); el("text", {}, ge);
+        el("path", { class: "owner-link" }, ge); el("rect", { rx: 18 }, ge); el("text", {}, ge);
         groupEls.set(g.id, ge);
       }
+      ge.setAttribute("class", g.kind === "task_list" ? "group task-list" : "group");
       ge.style.display = "";
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const m of members) {
@@ -296,8 +299,41 @@ const Board = (() => {
       }
       const r = ge.querySelector("rect"), t = ge.querySelector("text");
       r.setAttribute("x", x0 - 22); r.setAttribute("y", y0 - 36); r.setAttribute("width", x1 - x0 + 44); r.setAttribute("height", y1 - y0 + 58);
-      t.setAttribute("x", x0 - 10); t.setAttribute("y", y0 - 18); t.textContent = g.label;
+      const done = members.filter((m) => m.done).length;
+      t.setAttribute("x", x0 - 10); t.setAttribute("y", y0 - 18); t.textContent = g.kind === "task_list" ? `☑ ${g.label} · ${done}/${members.length}` : g.label;
+      // a person's task list: a dotted line from the list box to its owner
+      const link = ge.querySelector(".owner-link"), og = g.owner && shownData.nodes[g.owner] ? geom(g.owner) : null;
+      if (og) {
+        link.setAttribute("d", ownerLine(og, x0 - 22, y0 - 36, x1 + 22, y1 + 22));
+        link.style.display = "";
+      } else link.style.display = "none";
     }
+  }
+
+  /* A dotted line from an actor (its geom) to the nearest point of a box: a person's task list or task. */
+  function ownerLine(og, bx0, by0, bx1, by1) {
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const px = clamp(og.x, bx0, bx1), py = clamp(og.y, by0, by1);
+    const dx = px - og.x, dy = py - og.y;
+    const s = Math.min(og.w / 2 / (Math.abs(dx) || 1e-6), og.h / 2 / (Math.abs(dy) || 1e-6), 1);
+    return `M${og.x + dx * s},${og.y + dy * s} L${px},${py}`;
+  }
+
+  /* Assigned tasks link to their actor, like a person's task list does; not inside that person's own list. */
+  function drawAssignLinks() {
+    if (!shownData) return;
+    const want = new Set();
+    for (const n of Object.values(shownData.nodes)) {
+      if (n.type !== "task" || !n.assignee || !shownData.nodes[n.assignee]) continue;
+      if (n.group && (shownData.groups[n.group] || {}).owner === n.assignee) continue;
+      const og = geom(n.assignee), tg = geom(n.id);
+      if (!og || !tg) continue;
+      want.add(n.id);
+      let link = assignLinks.get(n.id);
+      if (!link) { link = el("path", { class: "owner-link" }, groupsLayer); assignLinks.set(n.id, link); }
+      link.setAttribute("d", ownerLine(og, tg.x - tg.w / 2, tg.y - tg.h / 2, tg.x + tg.w / 2, tg.y + tg.h / 2));
+    }
+    for (const [id, link] of [...assignLinks]) if (!want.has(id)) { link.remove(); assignLinks.delete(id); }
   }
 
   // --------------------------------------------------------- camera
@@ -345,6 +381,7 @@ const Board = (() => {
     const boxes = nodeBoxes();
     for (const ee of edgeEls.values()) drawEdge(ee, boxes);
     drawGroups();
+    drawAssignLinks();
     const f = 0.12;
     const dk = camT.k - cam.k, dxx = camT.x - cam.x, dyy = camT.y - cam.y;
     if (camTween) {
@@ -362,10 +399,12 @@ const Board = (() => {
   function showTip(ev, id) {
     const ne = nodeEls.get(id); if (!ne) return;
     const n = ne.data;
-    const typeName = { actor: "Actor", system: "System", step: "Step", decision: "Decision", data: "Data" }[n.type] || n.type;
+    const typeName = { actor: "Actor", system: "System", step: "Step", decision: "Decision", data: "Data", task: "Task" }[n.type] || n.type;
+    const owner = n.type === "task" ? (n.assignee && shownData.nodes[n.assignee] ? shownData.nodes[n.assignee].label : "unassigned") : null;
+    const doneTxt = n.type === "task" ? (n.done ? " · ✓ done" : " · open") : "";
     const statusTxt = { confirmed: "", ghost: " · proposed (not confirmed yet)", disputed: " · DISPUTED", resolved: " · resolved" }[n.status] || "";
     tooltip.innerHTML = `<div class="tt-title">${esc(n.label)}</div>
-      <div class="tt-meta">${typeName}${statusTxt}</div>
+      <div class="tt-meta">${typeName}${doneTxt}${statusTxt}${owner ? ` · assigned to <b>${esc(owner)}</b>` : ""}</div>
       <div class="tt-meta">last change by <b style="color:${colorOf(n.by)}">${esc(n.by || "?")}</b> · ${esc(n.src || "")}</div>
       ${n.note ? `<div class="tt-note ${n.status}">${esc(n.note)}</div>` : ""}`;
     tooltip.hidden = false;

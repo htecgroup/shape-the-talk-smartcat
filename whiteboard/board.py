@@ -13,13 +13,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-NODE_TYPES = {"actor", "system", "step", "decision", "data"}
+NODE_TYPES = {"actor", "system", "step", "decision", "data", "task"}
 STATUSES = {"confirmed", "ghost", "disputed", "resolved"}
 BOARD_KINDS = {"process", "architecture", "stakeholder", "mindmap", "timeline"}
 
 OP_FIELDS: dict[str, tuple[set[str], set[str]]] = {
     # op name: (required fields, optional fields) -- "op", "src", "by", "board" always allowed
-    "add_node": ({"id", "label", "type"}, {"status", "group", "note"}),
+    "add_node": ({"id", "label", "type"}, {"status", "group", "note", "assignee"}),
     "update_node": ({"id"}, {"label", "type", "note", "group"}),
     "remove_node": ({"id"}, set()),
     "connect": ({"from", "to"}, {"label", "status", "note"}),
@@ -27,7 +27,11 @@ OP_FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "reroute": ({"edge"}, {"via", "new_from", "new_to", "label"}),
     "mark": ({"target", "status"}, {"note"}),
     "add_group": ({"id", "label"}, set()),
+    "add_task_list": ({"id", "label"}, {"owner"}),
     "set_group": ({"node"}, {"group"}),
+    "assign": ({"node"}, {"assignee"}),
+    "complete_task": ({"node"}, set()),
+    "reopen_task": ({"node"}, set()),
     "new_board": ({"id", "title"}, {"kind"}),
     "switch_board": ({"board"}, set()),
     "undo": ({"target_src"}, set()),
@@ -107,6 +111,10 @@ class BoardState:
                         item["note"] = n["note"]
                     if n.get("group"):
                         item["group"] = n["group"]
+                    if n.get("assignee"):
+                        item["assignee"] = n["assignee"]
+                    if n.get("done"):
+                        item["done"] = True
                     nodes.append(item)
                 edges = []
                 for e in b["edges"].values():
@@ -121,7 +129,10 @@ class BoardState:
                 out["boards"].append({
                     "id": bid, "title": b["title"], "kind": b["kind"],
                     "nodes": nodes, "edges": edges,
-                    "groups": [{"id": g["id"], "label": g["label"]} for g in b["groups"].values()],
+                    "groups": [{"id": g["id"], "label": g["label"],
+                                **({"kind": g["kind"]} if g.get("kind") == "task_list" else {}),
+                                **({"owner": g["owner"]} if g.get("owner") else {})}
+                               for g in b["groups"].values()],
                 })
             else:
                 out["boards"].append({
@@ -271,7 +282,7 @@ class BoardState:
         missing = [f for f in sorted(required) if op.get(f) is None]
         if missing:
             raise OpError(f"{name}: missing {', '.join(missing)}")
-        for k in ("id", "from", "to", "via", "new_from", "new_to", "node", "group", "board"):
+        for k in ("id", "from", "to", "via", "new_from", "new_to", "node", "group", "board", "assignee", "owner"):
             if op.get(k) is not None:
                 op[k] = slug(op[k])
                 if not op[k]:
@@ -379,11 +390,85 @@ class BoardState:
         group = op.get("group")
         if group and group not in b["groups"]:
             raise OpError(f"add_node: unknown group {group!r}")
+        self._check_list_member(b, group, op["type"], "add_node")
+        # a task names its assignee only when that person is an actor on the board; otherwise it stays unassigned.
+        # A task put into a person's task list is that person's task.
+        assignee = op.get("assignee") if op["type"] == "task" and self._is_actor(b, op.get("assignee")) else None
+        assignee = self._list_owner(b, group) or assignee
+        op["assignee"] = assignee
         node = {"id": op["id"], "label": op["label"], "type": op["type"],
                 "status": op.get("status") or "confirmed", "note": op.get("note"),
                 "group": group, "created_v": self.version}
+        if assignee:
+            node["assignee"] = assignee
+            self._file_task(bid, node, op)
         self._stamp(node, op)
         self._put_node(bid, node, op["id"])
+
+    @staticmethod
+    def _is_actor(b: dict, nid: str | None) -> bool:
+        return bool(nid) and (b["nodes"].get(nid) or {}).get("type") == "actor"
+
+    @staticmethod
+    def _list_owner(b: dict, group: str | None) -> str | None:
+        return (b["groups"].get(group) or {}).get("owner") if group else None
+
+    @staticmethod
+    def _is_shared_list(b: dict, group: str | None) -> bool:
+        g = b["groups"].get(group) if group else None
+        return bool(g) and g.get("kind") == "task_list" and not g.get("owner")
+
+    def _file_task(self, bid: str, node: dict, op: dict) -> None:
+        """Put a task where its assignment says: an assigned task into its assignee's task list (created when
+        they have none), an unassigned one out of a person's list back into a shared list (the one it came from).
+        Shared task lists hold only unassigned tasks. `node` is the new version of the task, changed in place."""
+        b = self.boards[bid]
+        assignee, group = node.get("assignee"), node.get("group")
+        if assignee:
+            if self._list_owner(b, group) == assignee:
+                return
+            if self._is_shared_list(b, group):
+                node["home"] = group
+            node["group"] = self._person_list(bid, assignee, op)
+        elif self._list_owner(b, group):
+            home = node.pop("home", None)
+            shared = [gid for gid in b["groups"] if self._is_shared_list(b, gid)]
+            node["group"] = home if home in shared else (shared[0] if shared else None)
+
+    def _person_list(self, bid: str, actor: str, op: dict) -> str:
+        """The id of the actor's own task list, created ("<Name>'s tasks") when they have none."""
+        b = self.boards[bid]
+        for gid, g in b["groups"].items():
+            if g.get("kind") == "task_list" and g.get("owner") == actor:
+                return gid
+        gid, i = slug(f"{actor}_tasks"), 2
+        while gid in b["groups"] or gid in b["nodes"]:
+            gid, i = slug(f"{actor}_tasks_{i}"), i + 1
+        group = {"id": gid, "label": f"{b['nodes'][actor]['label']}'s tasks", "kind": "task_list", "owner": actor}
+        self._stamp(group, op)
+        self._put_group(bid, group, gid)
+        return gid
+
+    @staticmethod
+    def _check_list_member(b: dict, group: str | None, node_type: str, opname: str) -> None:
+        """A task list holds tasks only."""
+        if group and b["groups"][group].get("kind") == "task_list" and node_type != "task":
+            raise OpError(f"{opname}: task list {group!r} holds tasks only, not a {node_type}")
+
+    def _unassign_from(self, bid: str, actor: str, op: dict) -> None:
+        """Tasks and task lists of an actor that is gone (removed or no longer an actor) lose their owner."""
+        for gid, g in list(self.boards[bid]["groups"].items()):
+            if g.get("owner") == actor:
+                new = copy.deepcopy(g)
+                new.pop("owner")
+                self._stamp(new, op)
+                self._put_group(bid, new, gid)
+        for nid, n in list(self.boards[bid]["nodes"].items()):
+            if n.get("assignee") == actor:
+                new = copy.deepcopy(n)
+                new.pop("assignee")
+                self._stamp(new, op)
+                self._put_node(bid, new, nid)
 
     def _op_update_node(self, op: dict) -> None:
         bid = self._board_for(op)
@@ -401,8 +486,14 @@ class BoardState:
                 changed = True
         if not changed:
             raise OpError("update_node: nothing to change")
+        self._check_list_member(b, node.get("group"), node["type"], "update_node")
+        if node["type"] != "task":
+            node.pop("assignee", None)
+            node.pop("done", None)
         self._stamp(node, op)
         self._put_node(bid, node, op["id"])
+        if old["type"] == "actor" and node["type"] != "actor":
+            self._unassign_from(bid, op["id"], op)
 
     def _op_remove_node(self, op: dict) -> None:
         bid = self._board_for(op)
@@ -412,6 +503,7 @@ class BoardState:
         for eid, e in list(b["edges"].items()):
             if e["from"] == op["id"] or e["to"] == op["id"]:
                 self._put_edge(bid, None, eid)
+        self._unassign_from(bid, op["id"], op)
         self._put_node(bid, None, op["id"])
 
     def _add_edge(self, bid: str, src: str, dst: str, op: dict, label=None, status=None, note=None):
@@ -542,6 +634,53 @@ class BoardState:
             return "confirmed"
         return status
 
+    def _assign_list(self, bid: str, op: dict, owner: str | None) -> None:
+        """A task list under a person's name: the list and every task in it belong to that person."""
+        b = self.boards[bid]
+        group = b["groups"][op["node"]]
+        if group.get("owner") == owner:
+            raise OpError("assign: task list already belongs to them")
+        new = copy.deepcopy(group)
+        if owner is None:
+            new.pop("owner", None)
+        else:
+            new["owner"] = owner
+        self._stamp(new, op)
+        self._put_group(bid, new, new["id"])
+        for nid, n in list(b["nodes"].items()):   # the list's tasks belong to its owner (none: unassigned)
+            if n.get("group") == group["id"] and n.get("assignee") != owner:
+                task = copy.deepcopy(n)
+                if owner:
+                    task["assignee"] = owner
+                else:
+                    task.pop("assignee", None)
+                self._stamp(task, op)
+                self._put_node(bid, task, nid)
+
+    def _set_done(self, op: dict, done: bool) -> None:
+        bid = self._board_for(op)
+        node = self.boards[bid]["nodes"].get(op["node"])
+        if node is None:
+            raise OpError(f"{op['op']}: no node {op['node']!r}")
+        if node["type"] != "task":
+            raise OpError(f"{op['op']}: {op['node']!r} is a {node['type']}, not a task")
+        if bool(node.get("done")) == done:
+            raise OpError(f"{op['op']}: {op['node']!r} is already {'done' if done else 'open'}")
+        new = copy.deepcopy(node)
+        if done:
+            new["done"] = True
+        else:
+            new.pop("done", None)
+        self._stamp(new, op)
+        self._put_node(bid, new, new["id"])
+
+    def _op_complete_task(self, op: dict) -> None:
+        """Tick a task off. It stays on the board, checked, so the plan still shows it."""
+        self._set_done(op, True)
+
+    def _op_reopen_task(self, op: dict) -> None:
+        self._set_done(op, False)
+
     def _op_add_group(self, op: dict) -> None:
         bid = self._board_for(op)
         if op["id"] in self.boards[bid]["groups"]:
@@ -549,6 +688,45 @@ class BoardState:
         group = {"id": op["id"], "label": op["label"]}
         self._stamp(group, op)
         self._put_group(bid, group, op["id"])
+
+    def _op_add_task_list(self, op: dict) -> None:
+        """A named group of tasks."""
+        bid = self._board_for(op)
+        if op["id"] in self.boards[bid]["groups"]:
+            raise OpError(f"add_task_list: group {op['id']!r} already exists")
+        group = {"id": op["id"], "label": op["label"], "kind": "task_list"}
+        if self._is_actor(self.boards[bid], op.get("owner")):   # a person's list; an unknown owner is left out
+            group["owner"] = op["owner"]
+        else:
+            op["owner"] = None
+        self._stamp(group, op)
+        self._put_group(bid, group, op["id"])
+
+    def _op_assign(self, op: dict) -> None:
+        """Set (or, with no assignee, clear) the actor a task or a task list belongs to."""
+        bid = self._board_for(op)
+        b = self.boards[bid]
+        assignee = op.get("assignee")
+        if assignee is not None and not self._is_actor(b, assignee):
+            raise OpError(f"assign: {assignee!r} is not an actor on this board")
+        if (b["groups"].get(op["node"]) or {}).get("kind") == "task_list":
+            self._assign_list(bid, op, assignee)
+            return
+        node = b["nodes"].get(op["node"])
+        if node is None:
+            raise OpError(f"assign: no task or task list {op['node']!r}")
+        if node["type"] != "task":
+            raise OpError(f"assign: {op['node']!r} is a {node['type']}, not a task")
+        if node.get("assignee") == assignee:
+            raise OpError("assign: already assigned that way")
+        new = copy.deepcopy(node)
+        if assignee is None:
+            new.pop("assignee", None)
+        else:
+            new["assignee"] = assignee
+        self._file_task(bid, new, op)   # moves it into the assignee's list, or back to the shared list
+        self._stamp(new, op)
+        self._put_node(bid, new, new["id"])
 
     def _op_set_group(self, op: dict) -> None:
         bid = self._board_for(op)
@@ -559,10 +737,16 @@ class BoardState:
         group = op.get("group")
         if group is not None and group not in b["groups"]:
             raise OpError(f"set_group: unknown group {group!r}")
+        self._check_list_member(b, group, node["type"], "set_group")
         if node.get("group") == group:
             raise OpError("set_group: already in that group")
         new = copy.deepcopy(node)
         new["group"] = group
+        new.pop("home", None)
+        if self._list_owner(b, group):          # into a person's list: their task
+            new["assignee"] = self._list_owner(b, group)
+        elif self._is_shared_list(b, group):    # back into a shared list: nobody's yet
+            new.pop("assignee", None)
         self._stamp(new, op)
         self._put_node(bid, new, new["id"])
 

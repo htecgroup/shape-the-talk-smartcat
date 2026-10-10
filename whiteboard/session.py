@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,12 @@ DATA_DIR = ROOT / "data"
 
 
 def load_meeting(path: Path | None = None) -> dict:
+    """The scripted meeting: `path`, else LW_MEETING (a file, or a name like "standup" for data/meeting_standup.json),
+    else the first data/meeting_*.json."""
+    if path is None and (choice := os.environ.get("LW_MEETING", "").strip()):
+        path = Path(choice) if choice.endswith(".json") else DATA_DIR / f"meeting_{choice}.json"
+        if not path.is_absolute() and not path.exists():
+            path = ROOT / path
     path = path or sorted(DATA_DIR.glob("meeting_*.json"))[0]
     return json.loads(path.read_text())
 
