@@ -192,6 +192,7 @@
   function scrollTranscript() { const t = $("transcript"); t.scrollTop = t.scrollHeight; }
   function updateProgress() {
     const n = S.utts.size;
+    $("uttCountRail").textContent = n;
     $("uttCount").textContent = S.total ? `${n} / ${S.total} utterances` : `${n} utterance${n === 1 ? "" : "s"}`;
     $("progressBar").style.width = S.total ? `${(100 * n) / S.total}%` : "0";
   }
@@ -338,8 +339,14 @@
     const order = { open: 0, parked: 1, answered: 2, resolved: 2 };
     qs = [...qs].sort((a, b) => order[a.status] - order[b.status]);
     ds = [...ds].sort((a, b) => order[a.status] - order[b.status]);
-    $("qCount").textContent = qs.filter((q) => q.status !== "answered").length;
-    $("dCount").textContent = ds.filter((d) => d.status === "open").length;
+    const nq = qs.filter((q) => q.status !== "answered").length, nd = ds.filter((d) => d.status === "open").length;
+    // while the right panel is collapsed, flash its rail when something new needs attention
+    if (isCollapsed("right") && (nq > +$("qCountRail").textContent || nd > +$("dCountRail").textContent)) {
+      const rail = $("btnRailRight");
+      rail.classList.remove("ping"); void rail.offsetWidth; rail.classList.add("ping");
+    }
+    $("qCount").textContent = $("qCountRail").textContent = nq;
+    $("dCount").textContent = $("dCountRail").textContent = nd;
     $("questions").innerHTML = qs.length ? qs.map((q) => `
       <li class="${q.status}"><span class="st st-${q.status}">${q.status}</span>${esc(q.question)}
       <div class="by">asked by <b style="color:${colorOf(q.asked_by)}">${esc(q.asked_by)}</b> · ${esc(q.src)}</div>
@@ -578,6 +585,28 @@
   }
   $("btnFocus").addEventListener("click", () => setFocus(!document.querySelector(".panel.meeting").classList.contains("focus")));
   setFocus(store.get("lw.focus") === "1");
+  // Collapse a side panel to a rail so the diagram gets its room (each side remembered per browser;
+  // the right one keeps the old Expand key); the board re-fits itself as it resizes
+  const COLLAPSE_KEY = { left: "lw.collapsedLeft", right: "lw.expanded" };
+  function isCollapsed(side) { return document.querySelector(".layout").classList.contains(`collapsed-${side}`); }
+  function setCollapsed(side, on) {
+    document.querySelector(".layout").classList.toggle(`collapsed-${side}`, on);
+    if (on && side === "right") $("btnRailRight").classList.remove("ping");
+    store.set(COLLAPSE_KEY[side], on ? "1" : "");
+    $("btnExpand").textContent = isCollapsed("left") && isCollapsed("right") ? "↤ Show panels" : "↔ Expand";
+  }
+  // Expand collapses both panels; once both are collapsed it brings both back
+  function toggleExpand() {
+    const on = !(isCollapsed("left") && isCollapsed("right"));
+    setCollapsed("left", on); setCollapsed("right", on);
+  }
+  $("btnExpand").addEventListener("click", toggleExpand);
+  $("btnCollapseLeft").addEventListener("click", () => setCollapsed("left", true));
+  $("btnCollapseRight").addEventListener("click", () => setCollapsed("right", true));
+  $("btnRailLeft").addEventListener("click", () => setCollapsed("left", false));
+  $("btnRailRight").addEventListener("click", () => setCollapsed("right", false));
+  setCollapsed("left", store.get(COLLAPSE_KEY.left) === "1");
+  setCollapsed("right", store.get(COLLAPSE_KEY.right) === "1");
   $("btnTidy").addEventListener("click", () => Board.tidy());
   document.querySelectorAll("#approvalSeg button").forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.approval !== S.approvalMode) send({ cmd: "approval_mode", mode: b.dataset.approval });
@@ -585,6 +614,7 @@
   $("btnFit").addEventListener("click", () => Board.fit());
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+    if (e.code === "KeyE" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleExpand(); return; }
     if (S.mode === "mic") {              // no space-bar shortcut while talking live; M toggles mute
       if (e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }
       return;

@@ -50,7 +50,12 @@
   <main class="layout">
     <!-- Meeting panel -->
     <section class="panel meeting">
-      <div class="panel-head"><h2>Meeting</h2><span class="head-right"><span class="sub" id="uttCount">0 / 0</span><button id="btnFocus" class="btn ghost tiny" title="Hide setup and participants to focus on the transcript">⤒ Focus</button></span></div>
+      <!-- shown instead of the panel while it is collapsed -->
+      <button class="rail" id="btnRailLeft" title="Show the meeting and transcript">
+        <span class="rail-item" title="Utterances">💬<b id="uttCountRail">0</b></span>
+        <span class="rail-label">Meeting &amp; transcript</span>
+      </button>
+      <div class="panel-head"><h2>Meeting</h2><span class="head-right"><span class="sub" id="uttCount">0 / 0</span><button id="btnFocus" class="btn ghost tiny" title="Hide setup and participants to focus on the transcript">⤒ Focus</button><button id="btnCollapseLeft" class="btn ghost tiny chev" title="Collapse this panel">‹</button></span></div>
       <div class="micbox" id="micBox" hidden>
         <div class="mic-fields">
           <label>Your name<input id="micName" maxlength="40" placeholder="You" autocomplete="off"></label>
@@ -85,6 +90,7 @@
           </span>
           <button class="btn tiny" id="btnTidy" title="Re-layout this board (animated)">✨ Tidy</button>
           <button class="btn tiny" id="btnFit" title="Fit board to screen">⤢ Fit</button>
+          <button class="btn tiny" id="btnExpand" title="Give the diagram more room by collapsing both side panels (E)">↔ Expand</button>
         </div>
       </div>
       <div class="board" id="board">
@@ -128,9 +134,15 @@
 
     <!-- Agents panel -->
     <section class="panel agents">
+      <!-- shown instead of the panel while it is collapsed -->
+      <button class="rail" id="btnRailRight" title="Show open questions and agent activity">
+        <span class="rail-item" title="Open questions">❓<b id="qCountRail">0</b></span>
+        <span class="rail-item" title="Open disagreements">⚡<b id="dCountRail">0</b></span>
+        <span class="rail-label">Questions &amp; activity</span>
+      </button>
       <div class="lists">
         <div class="list-card">
-          <div class="panel-head small"><h3>❓ Open questions</h3><span class="count" id="qCount">0</span></div>
+          <div class="panel-head small"><h3>❓ Open questions</h3><span class="head-right"><span class="count" id="qCount">0</span><button id="btnCollapseRight" class="btn ghost tiny chev" title="Collapse this panel">›</button></span></div>
           <ul class="qlist" id="questions"><li class="muted">None yet</li></ul>
         </div>
         <div class="list-card">

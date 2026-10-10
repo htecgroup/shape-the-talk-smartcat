@@ -56,7 +56,12 @@ const Board = (() => {
     layoutSig = opts.layoutSig || layoutSig;
     rc = window.rough ? rough.svg(svg) : null;
     setupPanZoom();
-    window.addEventListener("resize", () => { if (autoFit) fit(); });
+    // the board resizes with the window and when a side panel collapses or expands
+    let refit = 0;
+    new ResizeObserver(() => {
+      cancelAnimationFrame(refit);
+      refit = requestAnimationFrame(() => { if (autoFit) fit(); });
+    }).observe(container);
   }
 
   function setupPanZoom() {
