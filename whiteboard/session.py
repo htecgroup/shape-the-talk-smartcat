@@ -87,6 +87,7 @@ class Session(AgentPipeline):
         self.meaningful_since_analysis = 0
         self.consolidator_task: asyncio.Task | None = None
         self.meaningful_since_consolidation = 0
+        self.consolidated: dict[str, str] = {}   # board id -> its shape after the last cleanup pass
         self.questions: list[dict] = []
         self.disagreements: list[dict] = []
         # client snapshot view (built from emitted events, works for live and replay)

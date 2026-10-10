@@ -72,7 +72,10 @@ class AgentPipeline:
                 await self.pending[0][1]  # in-order: wait for the oldest extraction
                 items = self._next_batch()
                 if items:
+                    left = self.board.active
                     await self._run_modeller(items)
+                    if left and self.board.active != left and self._needs_consolidation(left):
+                        self._kick_consolidator(force=True, board_id=left)   # tidy up the board we just left
                     self.meaningful_since_analysis += len(items)
                     self.meaningful_since_consolidation += len(items)
                     if self.meaningful_since_analysis >= ANALYST_EVERY:
@@ -97,13 +100,21 @@ class AgentPipeline:
         return items
 
     async def _finish_meeting(self) -> None:
-        """Meeting over: final cleanup (so the saved board and the analysis see it), final analysis, then save."""
+        """Meeting over: final cleanup (so the saved board and the analysis see it), final analysis, then save.
+        The final cleanup covers every board that changed since its last pass (the active one always), so a
+        board left by a topic shift is cleaned up and gets a plan that covers it too. Then every board gets one
+        full re-layout in the browser (a recorded "relayout" event, so replay does it as well)."""
         for task in (self.consolidator_task, self.analyst_task):
             if task and not task.done():
                 await task
-        self._kick_consolidator(force=True)
-        if self.consolidator_task and not self.consolidator_task.done():
-            await self.consolidator_task
+        if CONSOLIDATE_EVERY > 0:
+            others = [b for b in self.board.board_order if b != self.board.active and self._needs_consolidation(b)]
+            for bid in others + ([self.board.active] if self.board.active else []):
+                self._kick_consolidator(force=True, board_id=bid)
+                if self.consolidator_task and not self.consolidator_task.done():
+                    await self.consolidator_task
+        if self.board.board_order:
+            await self.emit({"type": "relayout", "boards": list(self.board.board_order), "reason": "meeting_end"})
         self._kick_analyst(force=True)
         if self.analyst_task:
             await self.analyst_task
@@ -225,17 +236,27 @@ class AgentPipeline:
         return marks
 
     # --------------------------------------------------------- consolidator
-    def _kick_consolidator(self, force: bool = False) -> None:
+    def _kick_consolidator(self, force: bool = False, board_id: str | None = None) -> None:
+        """Start a cleanup pass on `board_id` (default: the active board)."""
         if CONSOLIDATE_EVERY <= 0 or (self.consolidator_task and not self.consolidator_task.done()):
             return  # disabled, or one at a time; the next trigger catches up
         if not force and self.meaningful_since_consolidation < CONSOLIDATE_EVERY:
             return
-        self.meaningful_since_consolidation = 0
-        self.consolidator_task = asyncio.create_task(self._run_consolidator())
+        if board_id is None or board_id == self.board.active:
+            self.meaningful_since_consolidation = 0
+        self.consolidator_task = asyncio.create_task(self._run_consolidator(board_id))
 
-    def _consolidator_guard(self, ops: list) -> tuple[list, list]:
+    def _needs_consolidation(self, bid: str) -> bool:
+        """The board changed since its last cleanup pass, or has no layout plan yet."""
+        b = self.board.boards.get(bid)
+        if not b or not b["nodes"]:
+            return False
+        no_plan = agents.settings.LAYOUT_HINTS and not self.board.layout_of(bid)
+        return no_plan or self.consolidated.get(bid) != _shape(b)
+
+    def _consolidator_guard(self, ops: list, bid: str | None = None) -> tuple[list, list]:
         """Drop ops the consolidator may not emit: tab changes, undo, and anything touching a dispute."""
-        b = self.board.boards.get(self.board.active) or {"nodes": {}, "edges": {}}
+        b = self.board.boards.get(bid or self.board.active) or {"nodes": {}, "edges": {}}
         def disputed(ref: Any) -> bool:
             item = b["nodes"].get(ref) or b["edges"].get(ref)
             return bool(item) and item["status"] in ("disputed", "resolved")
@@ -253,28 +274,33 @@ class AgentPipeline:
                 kept.append(op)
         return kept, rejected
 
-    async def _run_consolidator(self) -> None:
+    async def _run_consolidator(self, board_id: str | None = None) -> None:
         try:
             transcript = self._meaningful_transcript()
-            if not transcript or not self.board.active:
+            bid, hints = board_id or self.board.active, agents.settings.LAYOUT_HINTS
+            if not transcript or bid not in self.board.boards:
                 return
-            bid, hints = self.board.active, agents.settings.LAYOUT_HINTS
-            res = await agents.consolidate(self.meeting, transcript, self.board.compact(),
+            # The board to clean up is shown in full as "active_board" (the consolidator's prompt edits that one),
+            # also when it is not the visible tab (the final pass, or a board just left by a topic shift).
+            compact = {**self.board.compact(full_boards={bid}), "active_board": bid}
+            res = await agents.consolidate(self.meeting, transcript, compact,
                                            layout=self.board.layout_of(bid) if hints else None)
             ops = [op for op in (res.data or {}).get("ops", []) if isinstance(op, dict)]
             by_lookup = self._speakers()
             for op in ops:
+                op["board"] = bid           # pinned: the modeller may have switched tabs meanwhile
                 if op.get("src") not in by_lookup:
                     op["src"] = transcript[-1]["id"]
             # The modeller may have changed the board meanwhile; ops on elements that are gone are rejected per op.
-            ops, guard_rejected = self._consolidator_guard(ops)
+            ops, guard_rejected = self._consolidator_guard(ops, bid)
             result = self.board.apply_ops(ops, by_lookup=by_lookup)
             result["rejected"] = guard_rejected + result["rejected"]
             summary = (res.data or {}).get("summary") or ("consolidator error" if res.error else "")
             # layout plan: validated against the board after the ops (it may use a group the ops just added)
             changed = self.board.set_layout(bid, (res.data or {}).get("layout")) if hints else None
+            self.consolidated[bid] = _shape(self.board.boards[bid])
             await self._emit_board(result, "consolidator", {"board": bid, "plan": changed} if changed else None)
-            item = {"agent": "consolidator", "utts": [transcript[-1]["id"]], "latency_ms": res.latency_ms,
+            item = {"agent": "consolidator", "utts": [transcript[-1]["id"]], "board": bid, "latency_ms": res.latency_ms,
                     "summary": summary, "ops": result["applied"], "rejected": result["rejected"], "error": res.error,
                     "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}
             if hints and self.board.layout_of(bid):
@@ -299,6 +325,12 @@ class AgentPipeline:
     def _elapsed(self) -> float:
         """Seconds since the session started, for activity items."""
         return round(time.perf_counter() - self.t0, 2)
+
+
+def _shape(board: dict) -> str:
+    """What a cleanup pass looks at: nodes, edges and groups (not the layout plan or version stamps)."""
+    strip = lambda items: {k: {f: v for f, v in x.items() if f not in ("v", "by")} for k, x in items.items()}  # noqa: E731
+    return json.dumps([strip(board["nodes"]), strip(board["edges"]), strip(board["groups"])], sort_keys=True, default=str)
 
 
 def _plan_line(plan: dict | None) -> str:

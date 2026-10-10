@@ -35,7 +35,7 @@ and still does the geometry itself. `LW_LAYOUT_HINTS=0` turns it off (graph-only
 ## Development
 
 ```bash
-uv run --group dev pytest -q tests                  # 49 tests, no network
+uv run --group dev pytest -q tests                  # 52 tests, no network
 uv run python scripts/simulate.py --speed 2         # headless simulated run: final boards + latency
 uv run python scripts/simulate.py --describe runs/<file>.json
 uv run python scripts/feed_audio.py [file.wav]      # stream a WAV into talk-live mode as if it were the mic
@@ -59,9 +59,11 @@ Board Modeller   compact board JSON + recent transcript → typed ops
       ▼
 BoardState       single source of truth: validated, versioned, undo per utterance
       ▲   ├─ Analyst       background, every 4 utterances: open questions, disagreements, closes stale disputes
-      │   └─ Consolidator  background, every 6 utterances + at the end: merges duplicates and placeholders,
-      │                    groups parts, connects loose nodes (cleanup ops, never touches disputes or tabs)
-      │                    + a layout plan: story spine, direction, placements (LW_LAYOUT_HINTS)
+      │   └─ Consolidator  background, every 6 utterances, on the board a topic shift leaves, and at the end on
+      │                    every changed board: merges duplicates and placeholders, groups parts, connects
+      │                    loose nodes, folds technology/attribute nodes into notes, drops meta nodes
+      │                    (cleanup ops, never touches disputes or tabs)
+      │                    + a layout plan that covers the board: spine, direction, placements (LW_LAYOUT_HINTS)
       ▼
 WebSocket → browser renderer (SVG + rough.js)       runs/<timestamp>.json → replay
 ```
@@ -76,7 +78,8 @@ is mapped to the node it names or rejected.
 proposals are dashed, `disputed` elements get a red outline and ❗ badge, `resolved` a ✓. Changes glow in the speaker's
 colour. New nodes are placed next to what they connect to and existing nodes never move. ✨ Tidy re-lays out the
 whole board (flow order, groups together, long flows wrapped to fit the panel, edges routed round nodes) when you click
-it, or automatically after the consolidator restructured the board or changed its layout plan. With a plan, the
+it, automatically after the consolidator restructured the board or changed its layout plan, and once for every
+board when the meeting ends (a recorded `relayout` event, so Replay does it too). With a plan, the
 story's spine sets the flow order (and where it wraps), side nodes go where the plan puts them, and TB boards run top
 to bottom; without one (or for ids it doesn't know) Tidy falls back to the graph structure.
 

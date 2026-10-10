@@ -97,12 +97,12 @@ def test_consolidator_runs_every_n_and_at_the_end_with_guards(fake_agents, monke
         s = Session()
         orig = s._run_consolidator
 
-        async def seeded_run():  # an open dispute on n_u05 that the consolidator must leave alone
+        async def seeded_run(board_id=None):  # an open dispute on n_u05 that the consolidator must leave alone
             if not seeded:
                 s.board.apply_ops([{"op": "mark", "target": "n_u05", "status": "disputed", "src": "u05"}],
                                   by_lookup={u["id"]: u["speaker"] for u in s.spoken})
                 seeded["done"] = True
-            await orig()
+            await orig(board_id)
         s._run_consolidator = seeded_run
         assert (await s.start("live", speed=16))["ok"]
         await wait_for(lambda: s.status == "finished")
@@ -227,3 +227,98 @@ class _Sink:
 
     async def send_text(self, data):
         self.events.append(json.loads(data))
+
+
+def test_prompts_carry_the_general_modelling_rules():
+    from whiteboard.agents.prompts.consolidator import CONSOLIDATOR_LAYOUT_NOTES, CONSOLIDATOR_SYSTEM
+    from whiteboard.agents.prompts.modeller import MODELLER_SYSTEM
+    for rule in ("subject of the meeting", "Framing and summary sentences", "runs on / uses / is powered by",
+                 "in the background", "One thing, one node", "count announced without names", "add_group for X",
+                 "board (tab) id"):
+        assert rule in MODELLER_SYSTEM
+    for rule in ("Simplify", "Attribute and technology nodes", "Same thing, different names", "Meta and framing nodes",
+                 "Background components", "At most ~12 ops"):
+        assert rule in CONSOLIDATOR_SYSTEM
+    assert "NOT COVERED BY THE PLAN" in CONSOLIDATOR_LAYOUT_NOTES
+    for text in (MODELLER_SYSTEM, CONSOLIDATOR_SYSTEM, CONSOLIDATOR_LAYOUT_NOTES):   # general, not one transcript's
+        for word in ("Shape the Talk", "Jev", "Sonnet", "Board modeller", "Consolidator ("):
+            assert word not in text
+
+
+def test_consolidator_is_told_which_nodes_the_plan_misses(monkeypatch):
+    monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", True)
+    compact = {"active_board": "b", "boards": [
+        {"id": "a", "title": "A", "kind": "process", "nodes": ["x (X)"]},
+        {"id": "b", "title": "B", "kind": "architecture", "groups": [{"id": "g", "label": "G"}], "edges": [], "nodes": [
+            {"id": "mic", "label": "Mic"}, {"id": "srv", "label": "Server"}, {"id": "one", "label": "1", "group": "g"},
+            {"id": "store", "label": "Store"}, {"id": "late", "label": "Late"}, {"id": "later", "label": "Later"}]}]}
+    plan = {"direction": "LR", "spine": ["mic", "srv", "g"], "placements": [{"node": "store", "side": "below", "anchor": "srv"}]}
+    assert agents.consolidator.uncovered(compact, plan) == ["late", "later"]
+    user = agents.build_consolidator_user([{"id": "u01", "speaker": "Ana", "text": "hi"}], compact, plan)
+    assert "NOT COVERED BY THE PLAN (added since): late, later" in user
+    assert "NOT COVERED" not in agents.build_consolidator_user([], compact, None)       # no plan yet: nothing to extend
+
+
+def test_final_pass_covers_every_changed_board_and_relayouts(fake_agents, monkeypatch):
+    """A board left by a topic shift gets a cleanup pass (when it is left, and at the end if it changed again),
+    ops are pinned to the board they were made for, and the meeting ends with one recorded relayout event."""
+    monkeypatch.setattr(pipeline, "CONSOLIDATE_EVERY", 100)        # no periodic passes: only leave + final
+    monkeypatch.setattr(agents.settings, "LAYOUT_HINTS", True)
+    seen = []
+
+    async def model(meeting, compact, window, items):
+        ops = []
+        for i in items:
+            uid = i["utt"]["id"]
+            if uid == "u01":
+                ops.append({"op": "new_board", "id": "a", "title": "A", "kind": "process", "src": uid})
+            if uid == "u08":
+                ops.append({"op": "new_board", "id": "b", "title": "B", "kind": "architecture", "src": uid})
+            ops.append({"op": "add_node", "id": f"n_{uid}", "label": "x", "type": "step", "src": uid})
+        return CallResult({"summary": "ok", "ops": ops}, 1)
+
+    async def consolidate(meeting, transcript, compact, layout=None):
+        bid = compact["active_board"]
+        full = next(b for b in compact["boards"] if b["id"] == bid)
+        seen.append((bid, len(transcript), isinstance(full["nodes"][0], dict)))
+        first = full["nodes"][0]["id"]
+        return CallResult({"summary": "s", "ops": [{"op": "update_node", "id": first, "note": f"seen {bid}", "src": "u01"}],
+                           "layout": {"direction": "LR", "spine": [n["id"] for n in full["nodes"][:2]],
+                                      "placements": [], "groups": []}}, 3)
+
+    async def extract(meeting, context, utt):   # u08 switches to a new diagram
+        return CallResult({"kind": "new_info", "claims": [utt["text"]], "refers_to": None,
+                           "topic_shift": utt["id"] == "u08"}, 1)
+
+    monkeypatch.setattr(agents, "extract", extract)
+    monkeypatch.setattr(agents, "model", model)
+    monkeypatch.setattr(agents, "consolidate", consolidate)
+
+    async def run():
+        s = Session()
+        assert (await s.start("live", speed=16))["ok"]
+        await wait_for(lambda: s.status == "finished")
+        return s
+
+    s = asyncio.run(run())
+    assert seen[0][0] == "a" and seen[0][2]                        # left board "a": cleaned up, shown in full
+    assert seen[-1][0] == "b" and seen[-1][1] == 13               # final pass on the active board
+    assert all(bid in ("a", "b") for bid, _, _ in seen) and seen.count(("a", seen[0][1], True)) == 1
+    assert s.board.active == "b"
+    assert s.board.boards["a"]["nodes"]["n_u01"]["note"] == "seen a"   # pinned to "a" although "b" was active
+    assert s.board.layout_of("a")["spine"] and s.board.layout_of("b")["spine"]
+    kinds = [e["type"] for e in s.timeline]
+    relayout = [e for e in s.timeline if e["type"] == "relayout"]
+    assert len(relayout) == 1 and relayout[0]["boards"] == ["a", "b"]
+    last_cons = max(i for i, e in enumerate(s.timeline) if e["type"] == "activity" and e["item"]["agent"] == "consolidator")
+    assert kinds.index("relayout") > last_cons                      # after the final cleanup
+    saved = json.loads((recording.RUNS_DIR / s.run_file).read_text())
+    assert any(e["type"] == "relayout" for e in saved["events"])
+
+    async def replay():   # replay re-emits it, so the browser re-lays out there too
+        r = Session()
+        r.clients.add(sink := _Sink())
+        assert (await r.start("replay", run=s.run_file, speed=16))["ok"]
+        await wait_for(lambda: r.status == "finished")
+        return sink.events
+    assert any(e["type"] == "relayout" and e["boards"] == ["a", "b"] for e in asyncio.run(replay()))

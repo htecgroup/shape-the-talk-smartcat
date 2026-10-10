@@ -26,6 +26,20 @@ KEEP IT READABLE (a whiteboard for humans, typically 8-20 nodes per board)
 - Never fan out: a statement like "everything goes to X" or "notify at every status change" gets ONE or TWO edges from the most central node(s), with the rest in a note. Never connect more than 2 existing nodes to a new node in one utterance.
 - Do not invent steps, systems or edges nobody mentioned.
 
+WHAT IS (NOT) A NODE
+- The subject of the meeting (the product, system or process the board is about) is the board, not a node. Add it as a node only when it is clearly one component among others.
+- Framing and summary sentences ("it turns X into Y", "today I'll show you...", "in short, it does Z") add no nodes and no edges; at most a note on an existing node. Abstract inputs/outputs ("live conversation", "the result") are not nodes unless a concrete component produces or stores them.
+- "X runs on / uses / is powered by / is implemented with / is built on Y", where Y is a technology, model, library, language or vendor: put Y into X's note ("runs on Y"), no new node. Y is a node only when it is a separately deployed system that other components call (an external service, a database, a queue).
+- What a component produces, decides or tells another component ("the operations", "the order", "the layout") is a note on that component or an edge label, not a new node, unless it is stored or sent somewhere on the board.
+- One thing, one node: never add a second node for something already on the board under another name ("the browser" and "the diagram it renders", "the server" and "the backend"); update the existing node's note instead. But a part named after its host ("the browser's microphone", "the app's database") is not the host: when the host itself later does something else (renders, stores, sends), it gets its own node.
+- A count announced without names ("three models", "it has four agents") adds no placeholder nodes. When the names come, add the named nodes; if placeholders exist already, rename them with update_node instead of adding duplicates.
+- "X consists of / has N parts / is made of ...": add_group for X and set_group for the parts; no hub edges X -> part.
+- Never use a board (tab) id as a node id in connect or reroute.
+
+ARCHITECTURE BOARDS: edges show who calls whom or where data goes, not the order in which things were mentioned.
+- Components presented as stages of one pipeline in order ("first ... second ... third ...") are chained stage -> next stage; when the order of the call is only implied, use ghost edges.
+- A component that runs "in the background", "periodically" or "every N ..." connects to the data or system it reads or writes (e.g. a shared state or store), never to the component mentioned just before it.
+
 HOW TO REACT
 1. new_info: add what is newly stated and connect it to the existing diagram (ideally every new node gets at least one edge). Statements of how it works or what is needed (including requirements from the client) are "confirmed". Use "ghost" only for hedged, tentative proposals ("I'd do...", "what if...", "maybe we could...", "I'd go with..."). When someone else accepts a ghost proposal, mark it (and its ghost edges) "confirmed".
 2. correction: FIX the existing diagram in place. Use reroute (via = insert a node into an edge; new_from/new_to = change ends or reverse direction; set label when the old label no longer fits, e.g. "pulls" -> "pushes"), update_node (rename/retype keeps the node's position), disconnect, remove_node. Never leave the wrong version standing next to the right one. Example: "No, payment goes through the gateway first, never to the bank directly" when checkout->bank exists => add_node payment_gateway, reroute checkout->bank via payment_gateway (or disconnect + connect), and remove the bank node if it is no longer part of the flow.
@@ -49,6 +63,7 @@ MODELLER_SPEECH_NOTES = """
 
 LIVE SPEECH (this session): utterances are speech recognition of someone thinking out loud (usually one speaker, possibly a few people sharing one microphone). They contain fillers, fragments and run-on sentences.
 - Model the meaning, not the words. Never create nodes from filler words or garbled fragments that make no sense in context.
+- Someone presenting usually opens with the subject and a one-line summary ("today I'll show you X; it turns A into B"): that names the board, it is not part of the diagram.
 - Utterance boundaries come from pauses: a fragment that continues the previous utterance ("...and then it goes to the kitchen") extends what is already on the board.
 - A long utterance: apply its statements in order; where the speaker corrects themselves inside it, draw only the final version. Keep the diff readable (a long ramble rarely needs more than 6-8 ops); details go into notes.
 - kind=undo whose claims also state a replacement: emit the undo first, then model the replacement.

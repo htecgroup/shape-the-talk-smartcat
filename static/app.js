@@ -41,6 +41,7 @@
       case "extraction": return onExtraction(ev);
       case "activity": return addActivity(ev.item, true);
       case "board": return onBoard(ev);
+      case "relayout": return onRelayout(ev.boards);
       case "analysis": return renderLists(ev.questions, ev.disagreements);
       case "status": return setStatus(ev.status, ev.mode, ev.speed);
       case "run_saved": toast("System", `Run recorded → runs/${ev.file}. Replay it with ?replay=latest`); return loadRuns();
@@ -225,6 +226,14 @@
     const lastOp = (ev.applied || [])[ev.applied ? ev.applied.length - 1 : 0];
     const b = state.boards.find((x) => x.id === S.viewBoard) || null;
     Board.render(b, { version: ev.version, by: lastOp && lastOp.by, silent: ev.silent });
+  }
+
+  // meeting end: one full re-layout of every board (the shown one now, the others when shown), so nodes added
+  // after the last plan change follow the plan too
+  function onRelayout(ids = []) {
+    Board.relayout(ids);
+    const b = S.board && S.board.boards.find((x) => x.id === S.viewBoard);
+    if (b) Board.render(b, { silent: true });
   }
 
   function renderTabs(fresh = []) {
