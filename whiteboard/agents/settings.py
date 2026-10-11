@@ -12,6 +12,8 @@ MODEL = os.getenv("LW_MODEL", "claude-sonnet-5-5")
 EXTRACTOR_EFFORT = os.getenv("LW_EXTRACTOR_EFFORT", "low")
 MODELLER_EFFORT = os.getenv("LW_MODELLER_EFFORT", "low")
 ANALYST_EFFORT = os.getenv("LW_ANALYST_EFFORT", "low")
+# The spec writer runs only on request (Export -> Generate spec) and writes a short one-screen summary.
+SPEC_EFFORT = os.getenv("LW_SPEC_EFFORT", "low")
 # The modeller is on the live path (utterance -> board), so its model and thinking can be tuned alone.
 # LW_MODELLER_THINKING: "adaptive" (default) or "between_tools" (no thinking; Sonnet 5.5 only, effort <= high).
 MODELLER_MODEL = os.getenv("LW_MODELLER_MODEL", MODEL)

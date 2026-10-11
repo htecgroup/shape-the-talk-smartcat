@@ -51,9 +51,11 @@ class CallResult:
 
 
 async def call_json(name: str, system: str, user: str, schema: dict, effort: str,
-                    model: str = MODEL, thinking: str = "adaptive") -> CallResult:
+                    model: str = MODEL, thinking: str = "adaptive", timeout: float | None = None) -> CallResult:
     start = time.perf_counter()
     extra: dict[str, Any] = {}
+    if timeout is not None:      # per-call override of the client's 30 s (long on-demand outputs, e.g. the spec)
+        extra["timeout"] = timeout
     if thinking != "adaptive":
         extra["thinking"] = {"type": thinking}
     if not model.startswith("claude-haiku"):  # Haiku has no server-side refusal fallback

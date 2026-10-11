@@ -122,6 +122,10 @@ def clean_ops(data: dict | None) -> dict | None:
     return {**data, "ops": ops}
 
 
+# ===================================================================== Spec writer
+SPEC_SCHEMA = _obj({"title": S, "markdown": S})
+
+
 # ========================================================================= Analyst
 ANALYST_SCHEMA = _obj({
     "open_questions": {"type": "array", "items": _obj({

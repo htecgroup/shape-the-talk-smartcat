@@ -620,8 +620,93 @@
     if (b.dataset.approval !== S.approvalMode) send({ cmd: "approval_mode", mode: b.dataset.approval });
   }));
   $("btnFit").addEventListener("click", () => Board.fit());
+
+  // Export menu: images of the shown board are made here (positions exist only in this browser);
+  // JSON and Mermaid of all boards come from the server (/api/export/*).
+  const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "whiteboard";
+  function exportName(ext) {
+    const b = S.board && S.board.boards.find((x) => x.id === S.viewBoard);
+    return `${slug($("meetingTitle").textContent)}-${slug(b && b.title)}.${ext}`;
+  }
+  async function fetchExport(path) {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.blob();
+  }
+  function setExportMenu(open) {
+    $("exportMenu").hidden = !open;
+    $("btnExport").setAttribute("aria-expanded", open);
+    // Only PNG exports the board on screen; the rest cover all boards, and the server reports when all are empty
+    const empty = !$("boardEmpty").classList.contains("hide");
+    $("exportMenu").querySelectorAll("[data-export]").forEach((b) => {
+      b.disabled = b.dataset.export === "png" && empty;
+    });
+    if (spec.busy) $("btnSpec").disabled = true;
+  }
+
+  // Generated spec: one request at a time (the server refuses a second one too); shown in a modal
+  const spec = { busy: false, markdown: "", filename: "spec.md" };
+  async function generateSpec() {
+    spec.busy = true;
+    $("btnSpec").firstChild.textContent = "⏳ Generating spec… ";
+    toast("System", "Writing the spec from the boards and the transcript…");
+    try {
+      const r = await fetch("/api/export/spec", { method: "POST" });
+      const res = await r.json().catch(() => ({ ok: false, error: `${r.status} ${r.statusText}` }));
+      if (!res.ok) return toast("System", res.error || "Spec generation failed");
+      Object.assign(spec, { markdown: res.markdown, filename: res.filename });
+      $("specTitle").textContent = res.title;
+      $("specBody").textContent = res.markdown;
+      $("specModal").hidden = false;
+    } finally {
+      spec.busy = false;
+      $("btnSpec").firstChild.textContent = "✨ Generate spec… ";
+    }
+  }
+  const closeSpec = () => { $("specModal").hidden = true; };
+  $("specClose").addEventListener("click", closeSpec);
+  $("specModal").addEventListener("click", (e) => { if (e.target === $("specModal")) closeSpec(); });
+  $("specDownload").addEventListener("click", () =>
+    BoardExport.download(new Blob([spec.markdown], { type: "text/markdown" }), spec.filename));
+  $("specCopy").addEventListener("click", async () => {
+    try {  // navigator.clipboard is missing over plain http:// on a LAN IP
+      await navigator.clipboard.writeText(spec.markdown);
+      toast("System", "Spec copied");
+    } catch (e) {
+      console.error(e);
+      toast("System", "Couldn't copy here. Use Download instead");
+    }
+  });
+  async function runExport(kind) {
+    setExportMenu(false);
+    try {
+      const meeting = slug($("meetingTitle").textContent);
+      if (kind === "png") {
+        const blob = await BoardExport.png();
+        if (!blob) return toast("System", "The board is empty, nothing to export");
+        BoardExport.download(blob, exportName("png"));
+      } else if (kind === "json") {
+        BoardExport.download(await fetchExport("/api/export/board.json"), `${meeting}-board.json`);
+      } else if (kind === "mermaid") {
+        BoardExport.download(await fetchExport("/api/export/board.mmd"), `${meeting}-mermaid.md`);
+      } else if (kind === "spec" && !spec.busy) {
+        await generateSpec();
+      }
+    } catch (e) {
+      console.error(e);
+      toast("System", `Export failed: ${e.message || e}`);
+    }
+  }
+  $("btnExport").addEventListener("click", (e) => { e.stopPropagation(); setExportMenu($("exportMenu").hidden); });
+  $("exportMenu").addEventListener("click", (e) => {
+    const item = e.target.closest("[data-export]");
+    if (item && !item.disabled) runExport(item.dataset.export);
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".export")) setExportMenu(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { setExportMenu(false); closeSpec(); } });
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+    if (!$("specModal").hidden) return;  // reading the spec: Space scrolls it, not start/pause
     if (e.code === "KeyE" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleExpand(); return; }
     if (S.mode === "mic") {              // no space-bar shortcut while talking live; M toggles mute
       if (e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }

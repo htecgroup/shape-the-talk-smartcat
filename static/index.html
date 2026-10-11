@@ -91,6 +91,15 @@
           <button class="btn tiny" id="btnTidy" title="Re-layout this board (animated)">✨ Tidy</button>
           <button class="btn tiny" id="btnFit" title="Fit board to screen">⤢ Fit</button>
           <button class="btn tiny" id="btnExpand" title="Give the diagram more room by collapsing both side panels (E)">↔ Expand</button>
+          <div class="export">
+            <button class="btn tiny" id="btnExport" title="Export the board" aria-haspopup="menu" aria-expanded="false">⤓ Export ▾</button>
+            <div class="export-menu" id="exportMenu" role="menu" hidden>
+              <button role="menuitem" data-export="png">🖼 PNG image <span>this board</span></button>
+              <button role="menuitem" data-export="json">{ } Board data, JSON <span>all boards</span></button>
+              <button role="menuitem" data-export="mermaid">🧜 Mermaid <span>all boards</span></button>
+              <button role="menuitem" data-export="spec" id="btnSpec">✨ Generate spec… <span>AI, short</span></button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="board" id="board">
@@ -158,6 +167,21 @@
     </section>
   </main>
 
+  <!-- Generated spec (Export -> Generate spec) -->
+  <div class="modal" id="specModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="specTitle">
+      <div class="modal-head">
+        <h3 id="specTitle">Spec</h3>
+        <div class="modal-actions">
+          <button class="btn tiny" id="specCopy">📋 Copy</button>
+          <button class="btn tiny" id="specDownload">⤓ Download .md</button>
+          <button class="btn tiny" id="specClose" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <pre class="spec-body" id="specBody"></pre>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
   <!-- the board renderer: helpers first, board/board.js (the Board API app.js uses) last -->
   <script src="/static/board/svg.js"></script>
@@ -165,6 +189,7 @@
   <script src="/static/board/place.js"></script>
   <script src="/static/board/tidy.js"></script>
   <script src="/static/board/routing.js"></script>
+  <script src="/static/board/export.js"></script>
   <script src="/static/board/board.js"></script>
   <script src="/static/mic.js"></script>
   <script src="/static/app.js"></script>

@@ -217,6 +217,27 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .tab.new { animation: tabflash 1.6s ease 2; }
 @keyframes tabflash { 50% { background: #fff3bf; } }
 .board-tools { display: flex; align-items: center; gap: 6px; padding-bottom: 6px; }
+.export { position: relative; }
+.export-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 210px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 8px 28px rgba(0, 0, 0, .12);
+}
+.export-menu button {
+  display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 7px 9px; border: 0; border-radius: 6px;
+  background: none; font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer;
+}
+.export-menu button:hover:not(:disabled) { background: #f7f5f0; }
+.export-menu button:disabled { color: var(--muted); cursor: default; }
+.export-menu button span { color: var(--muted); font-size: 11px; }
+.modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(20, 20, 20, .35); }
+.modal-card {
+  display: flex; flex-direction: column; width: min(860px, 100%); max-height: min(86vh, 100%);
+  background: var(--panel); border-radius: var(--radius); box-shadow: 0 16px 48px rgba(0, 0, 0, .2); overflow: hidden;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.modal-head h3 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.spec-body { flex: 1; margin: 0; padding: 14px 16px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 .legend { display: inline-flex; gap: 5px; margin-right: 6px; flex-wrap: wrap; }
 .lg { font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1.5px solid; font-family: var(--hand); font-weight: 700; }
 .lg-actor { background: #fff3bf; border-color: #f08c00; color: #8f5100; border-radius: 999px; }

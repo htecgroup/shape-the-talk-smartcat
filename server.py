@@ -13,11 +13,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).parent / ".env")
 
+from whiteboard import agents, export  # noqa: E402
 from whiteboard.recording import list_runs  # noqa: E402
 from whiteboard.session import Session  # noqa: E402
 from whiteboard.sources import MicSource  # noqa: E402
@@ -62,6 +63,53 @@ async def state() -> dict:
 @app.get("/api/runs")
 async def runs() -> list[dict]:
     return list_runs()
+
+
+# Exports read the client view (view_board / view_transcript), so they work for live, talk-live and replay.
+def _attachment(filename: str) -> dict:
+    return {"Content-Disposition": f'attachment; filename="{filename}"'}
+
+
+def _spoken(s: Session) -> list[dict]:
+    return [u for u in s.view_transcript if u.get("done")]
+
+
+@app.get("/api/export/board.json")
+async def export_json() -> JSONResponse:
+    s = get_session()
+    data = export.board_json(s.meeting, s.view_board)
+    return JSONResponse(data, headers=_attachment(f"{export.slug(s.meeting.get('title'))}-board.json"))
+
+
+@app.get("/api/export/board.mmd")
+async def export_mermaid() -> PlainTextResponse:
+    s = get_session()
+    return PlainTextResponse(export.all_mermaid(s.meeting, s.view_board), media_type="text/markdown",
+                             headers=_attachment(f"{export.slug(s.meeting.get('title'))}-mermaid.md"))
+
+
+spec_running = False
+
+
+@app.post("/api/export/spec")
+async def export_spec() -> JSONResponse:
+    global spec_running
+    s = get_session()
+    boards = export.board_json(s.meeting, s.view_board)["boards"]
+    if not any(b["nodes"] for b in boards):
+        return JSONResponse({"ok": False, "error": "the board is empty, nothing to write a spec about"}, 400)
+    if spec_running:
+        return JSONResponse({"ok": False, "error": "a spec is already being generated"}, 409)
+    spec_running = True
+    try:
+        transcript = [u for u in _spoken(s) if u.get("kind") != "chit_chat"]
+        res = await agents.generate_spec(s.meeting, transcript, {"boards": boards}, s.questions, s.disagreements)
+    finally:
+        spec_running = False
+    if not res.data:   # call_json never raises; it reports network/refusal/max_tokens in res.error
+        return JSONResponse({"ok": False, "error": f"spec generation failed: {res.error or 'no output'}"}, 502)
+    return JSONResponse({"ok": True, "title": res.data["title"], "markdown": res.data["markdown"],
+                         "filename": f"{export.slug(s.meeting.get('title'))}-spec.md"})
 
 
 async def handle_command(msg: dict) -> dict:
