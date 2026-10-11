@@ -7,7 +7,7 @@
  */
 const BoardExport = (() => {
   const PAD = 32;
-  const PAPER = "#fbfaf6";          // --board
+  const PAPER = "#faf7f2";          // --board
   const MAX_SIDE = 8192;            // keep canvases inside browser limits
   const HAND = '"Kalam", "Comic Sans MS", cursive';
   const SANS = '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif';

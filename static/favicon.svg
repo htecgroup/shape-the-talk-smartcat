@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- the logo's "S": two slanted pills, navy where they overlap -->
+  <defs>
+    <mask id="top"><path d="M9 13.5 L23 8" stroke="#fff" stroke-width="9" stroke-linecap="round"/></mask>
+  </defs>
+  <path d="M9 13.5 L23 8" stroke="#f5841f" stroke-width="9" stroke-linecap="round"/>
+  <path d="M9 24 L23 16.5" stroke="#7b6cf6" stroke-width="9" stroke-linecap="round"/>
+  <path d="M9 24 L23 16.5" stroke="#0e1350" stroke-width="9" stroke-linecap="round" mask="url(#top)"/>
+</svg>

@@ -3,6 +3,9 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const params = new URLSearchParams(location.search);
+  // an icon from the sprite in index.html (#i-<name>), optionally followed by a label
+  const ico = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+  const setLabel = (el, name, text) => { el.innerHTML = (name ? ico(name) : "") + esc(text); };
 
   const S = {
     ws: null, mode: "live", status: "idle", speed: 1,
@@ -10,6 +13,7 @@
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
     source: "scripted",                       // what the current meeting is: scripted | mic
+    meetingTitle: "",  // the server's title, used in export filenames
     mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
     approvalMode: "auto", approvals: [],      // auto: agents edit freely | ask: removals wait for an OK
     serverMode: "idle",                       // the session's mode as the server reports it (S.mode is the toggle)
@@ -53,8 +57,8 @@
       case "approval_mode": return setApprovalMode(ev.mode);
       case "approvals": return renderApprovals(ev.pending);
       case "summary_writing":
-        S.summaryWriting = true; setSummaryItem(); return toast("System", "📝 Writing the meeting summary…");
-      case "summary": toast("System", "📝 Meeting summary ready. Find it under Export"); return setSummary(ev.summary);
+        S.summaryWriting = true; setSummaryItem(); return toast("System", "Writing the meeting summary…");
+      case "summary": toast("System", "Meeting summary ready. Find it under Export"); return setSummary(ev.summary);
       case "status": setServerMode(ev.mode); return setStatus(ev.status, ev.mode, ev.speed);
       case "run_saved":   // saved after the summary, so writing it is over (done or failed)
         S.summaryWriting = false; setSummaryItem();
@@ -99,7 +103,7 @@
   // ---------------------------------------------------------------- meeting
   function setMeeting(m) {
     if (!m) return;
-    $("meetingTitle").textContent = m.title;
+    S.meetingTitle = m.title;
     S.source = m.source || "scripted";
     $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime" : "simulated · no audio";
     S.total = m.total || 0;
@@ -111,7 +115,17 @@
         <div><div class="name">${esc(p.name)} <span class="bars"><i></i><i></i><i></i></span></div>
         <div class="role">${esc(p.role)}</div></div>
       </div>`).join("");
+    renderMeetingHead();
     updateProgress();
+  }
+
+  // The server's meeting only changes when one starts, so before that the mode toggle can point
+  // at a different kind of meeting (e.g. Talk live while the FreshBite one is loaded). Until it
+  // starts, hide the other meeting's participants.
+  function renderMeetingHead() {
+    const started = S.status === "running" || S.status === "paused";
+    const matches = started || (S.mode === "replay" ? S.serverMode === "replay" : (S.mode === "mic") === (S.source === "mic"));
+    $("participants").hidden = !matches;
   }
 
   function setSpeaking(name, on) {
@@ -408,7 +422,7 @@
       : `Remove ${quote(labelOf(p, p.target))} <span class="muted">${esc(p.type)}</span>`;
     const busy = (p) => S.deciding.has(p.id) ? "disabled" : "";
     box.innerHTML = `
-      <div class="appr-head"><span>✋ Waiting for your OK</span><span class="count">${pending.length}</span>
+      <div class="appr-head"><span>${ico("hand")}Waiting for your OK</span><span class="count">${pending.length}</span>
         ${canDecide && pending.length > 1 ? `<button class="btn tiny" data-id="*" data-approve="1" ${S.deciding.size ? "disabled" : ""}>Apply all</button>
           <button class="btn tiny ghost" data-id="*" data-approve="0" ${S.deciding.size ? "disabled" : ""}>Keep all</button>` : ""}</div>
       ${pending.map((p) => `
@@ -458,9 +472,10 @@
     $("statusText").textContent = txt;
     $("btnStart").disabled = running;
     $("btnPause").disabled = !running;
-    $("btnPause").textContent = status === "paused" ? "▶ Resume" : "❚❚ Pause";
+    setLabel($("btnPause"), status === "paused" ? "play" : "pause", status === "paused" ? "Resume" : "Pause");
     if (status === "paused") setSpeaking(null, false);
     if (mode && mode !== "idle") setMode(mode, true);
+    renderMeetingHead();
     if (running) S.summaryWriting = false;
     setSummaryItem();
     updateMicUI();
@@ -468,9 +483,10 @@
 
   function setMode(mode, fromServer) {
     S.mode = mode;
+    renderMeetingHead();
     document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
     $("runSelect").hidden = mode !== "replay";
-    $("btnStart").textContent = mode === "replay" ? "▶ Play recording" : "▶ Start meeting";
+    setLabel($("btnStart"), "play", mode === "replay" ? "Play recording" : "Start meeting");
     $("micBox").hidden = mode !== "mic";
     $("speedSeg").hidden = mode === "mic";
     $("btnPause").hidden = mode === "mic";
@@ -510,19 +526,19 @@
     const canMute = st === "listening" && S.micOwner && Mic.active;
     const muted = canMute && Mic.muted;
     $("btnMute").hidden = !canMute;
-    $("btnMute").textContent = muted ? "🎙 Unmute" : "🔇 Mute";
+    setLabel($("btnMute"), muted ? "mic" : "mic-off", muted ? "Unmute" : "Mute");
     if (muted) { $("micRec").className = "rec rec-muted"; $("micStateText").textContent = "Muted"; }
     if (!running) {
       btn.disabled = false;
-      btn.textContent = canContinue() ? "🎙 Continue talking" : "🎙 Start talking";
+      setLabel(btn, "mic", canContinue() ? "Continue talking" : "Start talking");
       if (canContinue()) $("micStateText").textContent = "Stopped · board kept";
       return;
     }
-    if (st === "error") { btn.disabled = false; btn.textContent = "↻ Reconnect mic"; return; }
+    if (st === "error") { btn.disabled = false; setLabel(btn, "refresh", "Reconnect mic"); return; }
     if (st === "stopping") { btn.disabled = true; btn.textContent = "Finishing…"; return; }
     if (st === "connecting" || st === "listening") {
       btn.disabled = !S.micOwner;       // only the browser that owns the mic can stop it
-      btn.textContent = "■ Stop";
+      setLabel(btn, "stop", "Stop");
       return;
     }
     btn.disabled = true; btn.textContent = "Finishing…";
@@ -564,7 +580,7 @@
     const sel = $("runSelect");
     const prev = sel.value;
     sel.innerHTML = `<option value="latest">Latest complete run</option>` + runs.map((r) =>
-      `<option value="${esc(r.file)}">${r.source === "mic" ? "🎙 " : ""}${esc(r.file.replace(".json", ""))}${r.complete ? "" : " (partial)"}${r.source === "mic" ? "" : ` · ${r.speed}×`}</option>`).join("");
+      `<option value="${esc(r.file)}">${r.source === "mic" ? "Talk live · " : ""}${esc(r.file.replace(".json", ""))}${r.complete ? "" : " (partial)"}${r.source === "mic" ? "" : ` · ${r.speed}×`}</option>`).join("");
     if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   }
 
@@ -597,7 +613,7 @@
   // Focus: hide setup fields, hint and participants so the transcript gets the space (remembered per browser)
   function setFocus(on) {
     document.querySelector(".panel.meeting").classList.toggle("focus", on);
-    $("btnFocus").textContent = on ? "⤓ Show details" : "⤒ Focus";
+    setLabel($("btnFocus"), on ? "download" : "focus", on ? "Show details" : "Focus");
     store.set("lw.focus", on ? "1" : "");
   }
   $("btnFocus").addEventListener("click", () => setFocus(!document.querySelector(".panel.meeting").classList.contains("focus")));
@@ -610,7 +626,8 @@
     document.querySelector(".layout").classList.toggle(`collapsed-${side}`, on);
     if (on && side === "right") $("btnRailRight").classList.remove("ping");
     store.set(COLLAPSE_KEY[side], on ? "1" : "");
-    $("btnExpand").textContent = isCollapsed("left") && isCollapsed("right") ? "↤ Show panels" : "↔ Expand";
+    const both = isCollapsed("left") && isCollapsed("right");
+    setLabel($("btnExpand"), both ? "columns" : "expand", both ? "Show panels" : "Expand");
   }
   // Expand collapses both panels; once both are collapsed it brings both back
   function toggleExpand() {
@@ -635,7 +652,7 @@
   const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "whiteboard";
   function exportName(ext) {
     const b = S.board && S.board.boards.find((x) => x.id === S.viewBoard);
-    return `${slug($("meetingTitle").textContent)}-${slug(b && b.title)}.${ext}`;
+    return `${slug(S.meetingTitle)}-${slug(b && b.title)}.${ext}`;
   }
   async function fetchExport(path) {
     const r = await fetch(path);
@@ -658,7 +675,7 @@
   const spec = { busy: false, markdown: "", filename: "spec.md" };
   async function generateSpec() {
     spec.busy = true;
-    $("btnSpec").firstChild.textContent = "⏳ Generating spec… ";
+    $("btnSpec").firstElementChild.innerHTML = `<svg class="i spin" aria-hidden="true"><use href="#i-loader"/></svg>Generating spec…`;
     toast("System", "Writing the spec from the boards and the transcript…");
     try {
       const r = await fetch("/api/export/spec", { method: "POST" });
@@ -667,7 +684,7 @@
       openSpec(res);
     } finally {
       spec.busy = false;
-      $("btnSpec").firstChild.textContent = "✨ Generate spec… ";
+      setLabel($("btnSpec").firstElementChild, "sparkles", "Generate spec…");
     }
   }
   function openSpec({ title, markdown, filename }) {
@@ -706,7 +723,7 @@
   async function runExport(kind) {
     setExportMenu(false);
     try {
-      const meeting = slug($("meetingTitle").textContent);
+      const meeting = slug(S.meetingTitle);
       if (kind === "png") {
         const blob = await BoardExport.png();
         if (!blob) return toast("System", "The board is empty, nothing to export");

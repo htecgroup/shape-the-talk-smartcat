@@ -3,41 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Whiteboard</title>
+  <title>Shape the Talk</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Kalam:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Kalam:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- UI icons: one thin line set (24×24, stroke = currentColor), used as <svg class="i"><use href="#i-name"/></svg> -->
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.8v14.4a.8.8 0 0 0 1.2.7l11.3-7.2a.8.8 0 0 0 0-1.4L8.2 4.1A.8.8 0 0 0 7 4.8z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="2.4"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 5 2.2M18.5 11a6.5 6.5 0 0 1-.9 3.3M5.5 11a6.5 6.5 0 0 0 10.4 5.2M12 17.5V21M3 3l18 18"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5"/><path d="M3.5 3.5v5h5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5"/><path d="M20.5 3.5v5h-5"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.9.7c0 1.6-2.5 2.3-2.5 3.8M12 17h.01"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12z"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11.5V7a1.8 1.8 0 0 0-3.6 0M14.4 10.5V5a1.8 1.8 0 0 0-3.6 0v5.5M10.8 10.5V6.5a1.8 1.8 0 0 0-3.6 0V14"/><path d="M18 9.5a1.8 1.8 0 0 1 3.6 0V14a8 8 0 0 1-8 7.5h-1.5a7 7 0 0 1-5.6-2.8L3.2 14.5a1.8 1.8 0 0 1 2.7-2.4l1.3 1.4"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M11 3.5 12.8 8.7 18 10.5l-5.2 1.8L11 17.5l-1.8-5.2L4 10.5l5.2-1.8z"/><path d="M18.5 3v4M16.5 5h4M18 16.5v3.5M16.25 18.25h3.5"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3.5H3.5V8M16 3.5h4.5V8M20.5 16v4.5H16M3.5 16v4.5H8"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M3.5 12h17M7.5 8l-4 4 4 4M16.5 8l4 4-4 4"/></symbol>
+    <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9 4.5v15M15 4.5v15"/></symbol>
+    <symbol id="i-focus" viewBox="0 0 24 24"><path d="M5 4h14M12 20V8.5M7.5 13 12 8.5l4.5 4.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v12M7.5 11l4.5 4.5 4.5-4.5M5 20h14"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="m20.5 15-5-5-11 10.5"/></symbol>
+    <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 3.5H7A2 2 0 0 0 5 5.5v4A2.5 2.5 0 0 1 2.5 12 2.5 2.5 0 0 1 5 14.5v4a2 2 0 0 0 2 2h1M16 3.5h1a2 2 0 0 1 2 2v4a2.5 2.5 0 0 0 2.5 2.5 2.5 2.5 0 0 0-2.5 2.5v4a2 2 0 0 1-2 2h-1"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.5"/><rect x="14" y="14" width="6.5" height="6.5" rx="1.5"/><path d="M6.75 10v3.25a4 4 0 0 0 4 4H14"/></symbol>
+    <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M14 3.5H6.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V9z"/><path d="M14 3.5V9h5.5M8.5 13h7M8.5 16.5h4.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 8.5V5.5a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-loader" viewBox="0 0 24 24"><path d="M20.5 12A8.5 8.5 0 1 1 14.6 3.9"/></symbol>
+  </svg>
   <header class="topbar">
     <div class="brand">
-      <svg viewBox="0 0 32 32" class="logo" aria-hidden="true">
-        <rect x="3" y="5" width="26" height="19" rx="3" fill="#fff" stroke="currentColor" stroke-width="2"/>
-        <path d="M8 18 L13 12 L17 15 L23 9" fill="none" stroke="#e8590c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M11 28 L16 24 L21 28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-      <div>
-        <div class="brand-name">Live Whiteboard</div>
-        <div class="meeting-title" id="meetingTitle">Loading meeting…</div>
-      </div>
+      <div class="logo" role="img" aria-label="Shape the Talk"></div>
     </div>
 
     <div class="controls">
       <div class="seg" id="modeSeg" role="group" aria-label="Mode">
         <button data-mode="live" class="on" title="Replay the scripted 4-person meeting through the AI pipeline">Simulated (AI)</button>
-        <button data-mode="mic" title="Talk into your microphone; the board builds from what you say">🎙 Talk live</button>
+        <button data-mode="mic" title="Talk into your microphone; the board builds from what you say"><svg class="i"><use href="#i-mic"/></svg>Talk live</button>
         <button data-mode="replay">Replay</button>
       </div>
       <select id="runSelect" class="run-select" title="Recorded run to replay" hidden></select>
-      <button id="btnStart" class="btn primary">▶ Start meeting</button>
-      <button id="btnPause" class="btn" disabled>❚❚ Pause</button>
+      <button id="btnStart" class="btn primary"><svg class="i"><use href="#i-play"/></svg>Start meeting</button>
+      <button id="btnPause" class="btn" disabled><svg class="i"><use href="#i-pause"/></svg>Pause</button>
       <div class="seg" id="speedSeg" role="group" aria-label="Speed">
         <button data-speed="1" class="on">1×</button>
         <button data-speed="2">2×</button>
         <button data-speed="4">4×</button>
       </div>
-      <button id="btnReset" class="btn ghost">↺ Reset</button>
+      <button id="btnReset" class="btn ghost"><svg class="i"><use href="#i-reset"/></svg>Reset</button>
     </div>
 
     <div class="status">
@@ -52,10 +75,10 @@
     <section class="panel meeting">
       <!-- shown instead of the panel while it is collapsed -->
       <button class="rail" id="btnRailLeft" title="Show the meeting and transcript">
-        <span class="rail-item" title="Utterances">💬<b id="uttCountRail">0</b></span>
+        <span class="rail-item" title="Utterances"><svg class="i"><use href="#i-message"/></svg><b id="uttCountRail">0</b></span>
         <span class="rail-label">Meeting &amp; transcript</span>
       </button>
-      <div class="panel-head"><h2>Meeting</h2><span class="head-right"><span class="sub" id="uttCount">0 / 0</span><button id="btnFocus" class="btn ghost tiny" title="Hide setup and participants to focus on the transcript">⤒ Focus</button><button id="btnCollapseLeft" class="btn ghost tiny chev" title="Collapse this panel">‹</button></span></div>
+      <div class="panel-head"><h2>Meeting</h2><span class="head-right"><span class="sub" id="uttCount">0 / 0</span><button id="btnFocus" class="btn ghost tiny" title="Hide setup and participants to focus on the transcript"><svg class="i"><use href="#i-focus"/></svg>Focus</button><button id="btnCollapseLeft" class="btn ghost tiny chev" title="Collapse this panel" aria-label="Collapse this panel"><svg class="i"><use href="#i-chevron-left"/></svg></button></span></div>
       <div class="micbox" id="micBox" hidden>
         <div class="mic-fields">
           <label>Your name<input id="micName" maxlength="40" placeholder="You" autocomplete="off"></label>
@@ -64,7 +87,7 @@
         <div class="mic-row">
           <span class="rec" id="micRec"><span class="dot"></span><span id="micStateText">Mic off</span></span>
           <div class="meter" title="Microphone level"><div id="micLevel"></div></div>
-          <button id="btnMute" class="btn ghost tiny" title="Mute your mic while others talk (M)" hidden>🔇 Mute</button>
+          <button id="btnMute" class="btn ghost tiny" title="Mute your mic while others talk (M)" hidden><svg class="i"><use href="#i-mic-off"/></svg>Mute</button>
         </div>
         <div class="mic-err" id="micErr" hidden></div>
         <div class="mic-hint" id="micHint">Speak in English, in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>
@@ -82,23 +105,23 @@
         <div class="tabs" id="tabs"></div>
         <div class="board-tools">
           <div class="seg tiny" id="approvalSeg" role="group" aria-label="Agent edits">
-            <button data-approval="auto" class="on" title="Autopilot: the agents edit the whole board freely">⚡ Autopilot</button>
-            <button data-approval="ask" title="Ask first: the agents add and change freely, but removing a node waits for your OK">✋ Ask first</button>
+            <button data-approval="auto" class="on" title="Autopilot: the agents edit the whole board freely"><svg class="i"><use href="#i-zap"/></svg>Autopilot</button>
+            <button data-approval="ask" title="Ask first: the agents add and change freely, but removing a node waits for your OK"><svg class="i"><use href="#i-hand"/></svg>Ask first</button>
           </div>
           <span class="legend">
             <span class="lg lg-actor">Actor</span><span class="lg lg-system">System</span><span class="lg lg-step">Step</span><span class="lg lg-decision">Decision</span><span class="lg lg-data">Data</span><span class="lg lg-task">Task</span>
           </span>
-          <button class="btn tiny" id="btnTidy" title="Re-layout this board (animated)">✨ Tidy</button>
-          <button class="btn tiny" id="btnFit" title="Fit board to screen">⤢ Fit</button>
-          <button class="btn tiny" id="btnExpand" title="Give the diagram more room by collapsing both side panels (E)">↔ Expand</button>
+          <button class="btn tiny" id="btnTidy" title="Re-layout this board (animated)"><svg class="i"><use href="#i-sparkles"/></svg>Tidy</button>
+          <button class="btn tiny" id="btnFit" title="Fit board to screen"><svg class="i"><use href="#i-fit"/></svg>Fit</button>
+          <button class="btn tiny" id="btnExpand" title="Give the diagram more room by collapsing both side panels (E)"><svg class="i"><use href="#i-expand"/></svg>Expand</button>
           <div class="export">
-            <button class="btn tiny" id="btnExport" title="Export the board" aria-haspopup="menu" aria-expanded="false">⤓ Export ▾</button>
+            <button class="btn tiny" id="btnExport" title="Export the board" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-download"/></svg>Export<svg class="i i-after"><use href="#i-chevron-down"/></svg></button>
             <div class="export-menu" id="exportMenu" role="menu" hidden>
-              <button role="menuitem" data-export="png">🖼 PNG image <span>this board</span></button>
-              <button role="menuitem" data-export="json">{ } Board data, JSON <span>all boards</span></button>
-              <button role="menuitem" data-export="mermaid">🧜 Mermaid <span>all boards</span></button>
-              <button role="menuitem" data-export="spec" id="btnSpec">✨ Generate spec… <span>AI, short</span></button>
-              <button role="menuitem" data-export="summary" id="btnSummary" title="Written by itself when the meeting ends" disabled>📝 Meeting summary <span>after the meeting</span></button>
+              <button role="menuitem" data-export="png"><b><svg class="i"><use href="#i-image"/></svg>PNG image</b><span>this board</span></button>
+              <button role="menuitem" data-export="json"><b><svg class="i"><use href="#i-braces"/></svg>Board data, JSON</b><span>all boards</span></button>
+              <button role="menuitem" data-export="mermaid"><b><svg class="i"><use href="#i-flow"/></svg>Mermaid</b><span>all boards</span></button>
+              <button role="menuitem" data-export="spec" id="btnSpec"><b><svg class="i"><use href="#i-sparkles"/></svg>Generate spec…</b><span>AI, short</span></button>
+              <button role="menuitem" data-export="summary" id="btnSummary" title="Written by itself when the meeting ends" disabled><b><svg class="i"><use href="#i-file-text"/></svg>Meeting summary</b><span>after the meeting</span></button>
             </div>
           </div>
         </div>
@@ -132,8 +155,8 @@
         </svg>
         <div class="board-empty" id="boardEmpty">
           <div class="board-empty-inner">
-            <div class="big">The whiteboard is empty</div>
-            <div>It fills in as the meeting talks. Nothing here is drawn by hand.</div>
+            <div class="big">Start talking. The diagram will follow.</div>
+            <div class="small">The whiteboard is empty</div>
           </div>
         </div>
         <div class="approvals" id="approvals" hidden></div>
@@ -146,17 +169,17 @@
     <section class="panel agents">
       <!-- shown instead of the panel while it is collapsed -->
       <button class="rail" id="btnRailRight" title="Show open questions and agent activity">
-        <span class="rail-item" title="Open questions">❓<b id="qCountRail">0</b></span>
-        <span class="rail-item" title="Open disagreements">⚡<b id="dCountRail">0</b></span>
+        <span class="rail-item" title="Open questions"><svg class="i"><use href="#i-help"/></svg><b id="qCountRail">0</b></span>
+        <span class="rail-item" title="Open disagreements"><svg class="i"><use href="#i-zap"/></svg><b id="dCountRail">0</b></span>
         <span class="rail-label">Questions &amp; activity</span>
       </button>
       <div class="lists">
         <div class="list-card">
-          <div class="panel-head small"><h3>❓ Open questions</h3><span class="head-right"><span class="count" id="qCount">0</span><button id="btnCollapseRight" class="btn ghost tiny chev" title="Collapse this panel">›</button></span></div>
+          <div class="panel-head small"><h3><svg class="i"><use href="#i-help"/></svg>Open questions</h3><span class="head-right"><span class="count" id="qCount">0</span><button id="btnCollapseRight" class="btn ghost tiny chev" title="Collapse this panel" aria-label="Collapse this panel"><svg class="i"><use href="#i-chevron-right"/></svg></button></span></div>
           <ul class="qlist" id="questions"><li class="muted">None yet</li></ul>
         </div>
         <div class="list-card">
-          <div class="panel-head small"><h3>⚡ Disagreements</h3><span class="count" id="dCount">0</span></div>
+          <div class="panel-head small"><h3><svg class="i"><use href="#i-zap"/></svg>Disagreements</h3><span class="count" id="dCount">0</span></div>
           <ul class="dlist" id="disagreements"><li class="muted">None yet</li></ul>
         </div>
       </div>
@@ -174,9 +197,9 @@
       <div class="modal-head">
         <h3 id="specTitle">Spec</h3>
         <div class="modal-actions">
-          <button class="btn tiny" id="specCopy">📋 Copy</button>
-          <button class="btn tiny" id="specDownload">⤓ Download .md</button>
-          <button class="btn tiny" id="specClose" title="Close (Esc)">✕</button>
+          <button class="btn tiny" id="specCopy"><svg class="i"><use href="#i-copy"/></svg>Copy</button>
+          <button class="btn tiny" id="specDownload"><svg class="i"><use href="#i-download"/></svg>Download .md</button>
+          <button class="btn tiny" id="specClose" title="Close (Esc)" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
         </div>
       </div>
       <pre class="spec-body" id="specBody"></pre>
