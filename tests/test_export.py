@@ -1,4 +1,4 @@
-"""Exports: board JSON, Mermaid, the spec writer prompt, and the /api/export routes (agents faked, no API calls).
+"""Exports: board JSON, Mermaid, the spec writer and meeting summary prompts, and the /api/export routes (agents faked, no API calls).
 
 Routes are called as plain async functions on a prepared session (no HTTP client needed)."""
 
@@ -131,6 +131,38 @@ def test_spec_prompt_formats_and_uses_long_timeout(monkeypatch):
     assert "{title}" not in seen["system"] and "{participants}" not in seen["system"]
     assert "[u1] Ana: Checkout pays the bank." in seen["user"]
     assert '"Order flow"' in seen["user"] and "Which bank?" in seen["user"] and "Store orders?" in seen["user"]
+
+
+# ------------------------------------------------------- meeting summarizer
+def test_summary_input_has_every_utterance_with_speaker_and_role():
+    done = [u for u in TRANSCRIPT if u["done"]]
+    user = agents.build_summary_user({**MEETING, "participants": MEETING["participants"][:1]}, done,
+                                     board_state().to_dict()["boards"], [{"question": "Which bank?"}], [])
+    lines = user.split("BOARDS:")[0]
+    assert "[u1] Ana (PM): Checkout pays the bank." in lines
+    assert "[u2] Marko (small talk): Can you hear me?" in lines              # unknown role, small talk kept but marked
+    assert lines.index("[u1]") < lines.index("[u2]") < lines.index("[u3] Ana (PM): Maybe we store orders.")
+    assert "Which bank?" in user
+    assert "- Order flow: Checkout; Bank \"X\" [EU]; Orders (ghost); OK?" in user.split("BOARDS:")[1]
+
+
+def test_summary_prompt_formats_and_uses_long_timeout(monkeypatch):
+    seen = {}
+
+    async def fake_call(name, system, user, schema, effort, **kw):
+        seen.update(name=name, system=system, user=user, schema=schema, effort=effort, **kw)
+        return CallResult({"title": "Orders: meeting summary", "markdown": "## Summary"}, 5)
+
+    monkeypatch.setattr(agents.summary, "call_json", fake_call)
+    res = asyncio.run(agents.generate_summary(MEETING, TRANSCRIPT[:3], [], [], [{"topic": "Store orders?"}]))
+    assert res.data["title"] == "Orders: meeting summary"
+    assert seen["name"] == "summary" and seen["schema"] is agents.SUMMARY_SCHEMA
+    assert seen["effort"] == agents.SUMMARY_EFFORT and seen["timeout"] == agents.summary.SUMMARY_TIMEOUT > 30
+    assert "Order Flow: v2" in seen["system"] and "- Marko: Dev" in seen["system"] and "{" not in seen["system"]
+    for section in ("## Attendees", "## Summary", "## Discussion", "## Decisions", "## Action items", "## Open questions"):
+        assert section in seen["system"]
+    assert "[u2] Marko (Dev) (small talk): Can you hear me?" in seen["user"] and "Store orders?" in seen["user"]
+    assert "BOARDS:\n(none)" in seen["user"]
 
 
 # ---------------------------------------------------------------- routes

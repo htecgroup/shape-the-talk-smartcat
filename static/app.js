@@ -14,6 +14,7 @@
     approvalMode: "auto", approvals: [],      // auto: agents edit freely | ask: removals wait for an OK
     serverMode: "idle",                       // the session's mode as the server reports it (S.mode is the toggle)
     deciding: new Set(), approvalsSig: null,  // proposals clicked, waiting to leave the list; last rendered panel
+    summary: null, summaryWriting: false,     // {title, markdown, filename}, written when the meeting ends
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
                   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
@@ -51,8 +52,13 @@
       case "analysis": return renderLists(ev.questions, ev.disagreements);
       case "approval_mode": return setApprovalMode(ev.mode);
       case "approvals": return renderApprovals(ev.pending);
+      case "summary_writing":
+        S.summaryWriting = true; setSummaryItem(); return toast("System", "📝 Writing the meeting summary…");
+      case "summary": toast("System", "📝 Meeting summary ready. Find it under Export"); return setSummary(ev.summary);
       case "status": setServerMode(ev.mode); return setStatus(ev.status, ev.mode, ev.speed);
-      case "run_saved": toast("System", `Run recorded → runs/${ev.file}. Replay it with ?replay=latest`); return loadRuns();
+      case "run_saved":   // saved after the summary, so writing it is over (done or failed)
+        S.summaryWriting = false; setSummaryItem();
+        toast("System", `Run recorded → runs/${ev.file}. Replay it with ?replay=latest`); return loadRuns();
       case "error": return toast("System", ev.error);
     }
   }
@@ -70,6 +76,7 @@
     $("activity").replaceChildren(); S.activity = [];
     for (const a of s.activity) addActivity(a, false);
     renderLists(s.questions, s.disagreements);
+    S.summaryWriting = false; setSummary(s.summary);
     S.board = null; S.knownBoards = new Set(); S.followActive = true;
     Board.reset();
     // a board that already has a layout plan is shown laid out by it
@@ -454,6 +461,8 @@
     $("btnPause").textContent = status === "paused" ? "▶ Resume" : "❚❚ Pause";
     if (status === "paused") setSpeaking(null, false);
     if (mode && mode !== "idle") setMode(mode, true);
+    if (running) S.summaryWriting = false;
+    setSummaryItem();
     updateMicUI();
   }
 
@@ -642,6 +651,7 @@
       b.disabled = b.dataset.export === "png" && empty;
     });
     if (spec.busy) $("btnSpec").disabled = true;
+    setSummaryItem();
   }
 
   // Generated spec: one request at a time (the server refuses a second one too); shown in a modal
@@ -654,14 +664,30 @@
       const r = await fetch("/api/export/spec", { method: "POST" });
       const res = await r.json().catch(() => ({ ok: false, error: `${r.status} ${r.statusText}` }));
       if (!res.ok) return toast("System", res.error || "Spec generation failed");
-      Object.assign(spec, { markdown: res.markdown, filename: res.filename });
-      $("specTitle").textContent = res.title;
-      $("specBody").textContent = res.markdown;
-      $("specModal").hidden = false;
+      openSpec(res);
     } finally {
       spec.busy = false;
       $("btnSpec").firstChild.textContent = "✨ Generate spec… ";
     }
+  }
+  function openSpec({ title, markdown, filename }) {
+    Object.assign(spec, { markdown, filename });
+    $("specTitle").textContent = title;
+    $("specBody").textContent = markdown;
+    $("specModal").hidden = false;
+  }
+  // Meeting-end summary (recorded, so replay has it too): Export -> Meeting summary opens it in the spec modal.
+  // Disabled until one exists; a continued talk-live meeting makes it out of date (the server drops it too).
+  function setSummary(summary) {
+    S.summary = summary || null;
+    if (S.summary) S.summaryWriting = false;
+    setSummaryItem();
+  }
+  function setSummaryItem() {
+    const running = S.status === "running" || S.status === "paused";
+    const ready = !!S.summary && !running;
+    $("btnSummary").disabled = !ready;
+    $("btnSummary").lastElementChild.textContent = ready ? "whole meeting" : S.summaryWriting ? "writing…" : "after the meeting";
   }
   const closeSpec = () => { $("specModal").hidden = true; };
   $("specClose").addEventListener("click", closeSpec);
@@ -671,7 +697,7 @@
   $("specCopy").addEventListener("click", async () => {
     try {  // navigator.clipboard is missing over plain http:// on a LAN IP
       await navigator.clipboard.writeText(spec.markdown);
-      toast("System", "Spec copied");
+      toast("System", "Copied as Markdown");
     } catch (e) {
       console.error(e);
       toast("System", "Couldn't copy here. Use Download instead");
@@ -691,6 +717,8 @@
         BoardExport.download(await fetchExport("/api/export/board.mmd"), `${meeting}-mermaid.md`);
       } else if (kind === "spec" && !spec.busy) {
         await generateSpec();
+      } else if (kind === "summary" && S.summary) {
+        openSpec(S.summary);
       }
     } catch (e) {
       console.error(e);

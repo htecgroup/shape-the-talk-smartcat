@@ -58,7 +58,8 @@ def save_run(s: Session, complete: bool) -> str | None:
         "meta": {"title": s.meeting["title"], "model": agents.MODEL,
                  "source": s.meeting.get("source", "scripted"),
                  "efforts": {"extractor": agents.EXTRACTOR_EFFORT, "modeller": agents.MODELLER_EFFORT,
-                             "analyst": agents.ANALYST_EFFORT, "consolidator": agents.CONSOLIDATOR_EFFORT},
+                             "analyst": agents.ANALYST_EFFORT, "consolidator": agents.CONSOLIDATOR_EFFORT,
+                             "summary": agents.SUMMARY_EFFORT},
                  "modeller": {"model": agents.MODELLER_MODEL, "thinking": agents.MODELLER_THINKING},
                  "consolidator": {"model": agents.CONSOLIDATOR_MODEL, "thinking": agents.CONSOLIDATOR_THINKING,
                                   "every": pipeline.CONSOLIDATE_EVERY, "layout_hints": agents.settings.LAYOUT_HINTS},
@@ -70,7 +71,7 @@ def save_run(s: Session, complete: bool) -> str | None:
                  "event_count": len(s.timeline), "latency": stats},
         "meeting": s.meeting,
         "final_board": s.board.to_dict(),
-        "questions": s.questions, "disagreements": s.disagreements,
+        "questions": s.questions, "disagreements": s.disagreements, "summary": s.summary,
         "events": s.timeline,
     }
     (RUNS_DIR / name).write_text(json.dumps(data, ensure_ascii=False, indent=1, default=str))

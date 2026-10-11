@@ -70,11 +70,20 @@ def fake_agents(monkeypatch, tmp_path):
                 "placements": [{"node": "n_u04", "side": "below", "anchor": "n_u02"}]}
         return CallResult({"summary": "cleanup", "ops": ops, "layout": plan}, 7, 10, 2)
 
+    async def generate_spec(*a):
+        raise AssertionError("the spec writer runs only on request")
+
+    async def generate_summary(meeting, transcript, boards, questions, disagreements):
+        calls["order"].append(("summary", len(transcript)))
+        calls.setdefault("summary_in", []).append(transcript)
+        return CallResult({"title": "T: meeting summary", "markdown": "## Decisions\n- Use B (Ana)"}, 3)
+
     async def warmup():
         return None
 
     for name, fn in [("extract", extract), ("model", model), ("analyse", analyse),
-                     ("consolidate", consolidate), ("warmup", warmup)]:
+                     ("consolidate", consolidate), ("generate_spec", generate_spec),
+                     ("generate_summary", generate_summary), ("warmup", warmup)]:
         monkeypatch.setattr(agents, name, fn)
     monkeypatch.setattr(recording, "RUNS_DIR", tmp_path)
     monkeypatch.setattr(session_mod, "load_meeting", lambda: MEETING)
@@ -111,7 +120,8 @@ def test_consolidator_runs_every_n_and_at_the_end_with_guards(fake_agents, monke
     s = asyncio.run(run())
     # 13 meaningful utterances: periodic runs (when 6 had arrived since the last one) + one final run
     assert len(fake_agents["consolidate"]) >= 2 and fake_agents["consolidate"][-1] == 13
-    assert fake_agents["order"][-2:] == [("consolidator", 13), ("analyst", 13)]  # final cleanup before final analysis
+    # final cleanup, then final analysis, then the meeting summary
+    assert fake_agents["order"][-3:] == [("consolidator", 13), ("analyst", 13), ("summary", 13)]
     acts = [e["item"] for e in s.timeline if e["type"] == "activity" and e["item"]["agent"] == "consolidator"]
     first = acts[0]
     assert [o["op"] for o in first["ops"]] == ["remove_node", "connect"]
@@ -219,6 +229,59 @@ def test_layout_hints_off_stores_no_plan(fake_agents, monkeypatch):
     assert s.board.layout_of("b") is None and all(x is None for x in fake_agents["layouts"])
     assert not any("layout" in e for e in s.timeline if e["type"] == "board")
     assert not any("layout" in e["item"] for e in s.timeline if e["type"] == "activity")
+
+
+def test_summary_is_written_at_the_end_recorded_and_replayed(fake_agents, monkeypatch):
+    async def extract(meeting, context, utt):   # small talk too: the summary reads the whole conversation
+        kind = "chit_chat" if utt["id"] == "u01" else "new_info"
+        return CallResult({"kind": kind, "claims": [utt["text"]], "refers_to": None, "topic_shift": False}, 1)
+    monkeypatch.setattr(agents, "extract", extract)
+
+    async def run():
+        s = Session()
+        assert (await s.start("live", speed=16))["ok"]
+        await wait_for(lambda: s.status == "finished" and s.run_file)
+        return s
+
+    s = asyncio.run(run())
+    summary = s.summary
+    assert summary == {"title": "T: meeting summary", "markdown": "## Decisions\n- Use B (Ana)",
+                       "filename": "t-summary.md"}                       # the agent's text as is, no diagrams
+    (given,) = fake_agents["summary_in"]
+    assert [u["id"] for u in given] == [f"u{i:02d}" for i in range(1, 14)]   # every finished utterance, in order
+    assert given[0]["kind"] == "chit_chat" and all(u["speaker"] == "Ana" for u in given)
+    events = [e for e in s.timeline if e["type"] == "summary"]
+    assert len(events) == 1 and s.timeline[-1] is events[0]
+    assert events[0]["t"] == s.timeline[-2]["t"]          # replay shows it right away, not after the model's latency
+    assert s.snapshot()["summary"] == summary
+    saved = json.loads((recording.RUNS_DIR / s.run_file).read_text())
+    assert saved["summary"] == summary and saved["meta"]["efforts"]["summary"] == agents.SUMMARY_EFFORT
+
+    async def replay():
+        r = Session()
+        r.clients.add(sink := _Sink())
+        assert (await r.start("replay", run=s.run_file, speed=16))["ok"]
+        await wait_for(lambda: r.status == "finished")
+        return r, sink.events
+    r, got = asyncio.run(replay())
+    assert r.summary == summary and any(e["type"] == "summary" for e in got)
+    assert fake_agents["order"].count(("summary", 13)) == 1  # the live run only; replay makes no calls
+
+
+def test_no_summary_for_an_empty_meeting(fake_agents, monkeypatch):
+    async def extract(meeting, context, utt):   # nothing but small talk
+        return CallResult({"kind": "chit_chat", "claims": [], "refers_to": None, "topic_shift": False}, 1)
+    monkeypatch.setattr(agents, "extract", extract)
+
+    async def run():
+        s = Session()
+        assert (await s.start("live", speed=16))["ok"]
+        await wait_for(lambda: s.status == "finished" and s.run_file)
+        return s
+
+    s = asyncio.run(run())
+    assert s.summary is None and not any(o[0] == "summary" for o in fake_agents["order"])
+    assert not any(e["type"] == "summary" for e in s.timeline)
 
 
 class _Sink:

@@ -70,10 +70,6 @@ def _attachment(filename: str) -> dict:
     return {"Content-Disposition": f'attachment; filename="{filename}"'}
 
 
-def _spoken(s: Session) -> list[dict]:
-    return [u for u in s.view_transcript if u.get("done")]
-
-
 @app.get("/api/export/board.json")
 async def export_json() -> JSONResponse:
     s = get_session()
@@ -95,14 +91,13 @@ spec_running = False
 async def export_spec() -> JSONResponse:
     global spec_running
     s = get_session()
-    boards = export.board_json(s.meeting, s.view_board)["boards"]
+    boards, transcript = s.spec_inputs()
     if not any(b["nodes"] for b in boards):
         return JSONResponse({"ok": False, "error": "the board is empty, nothing to write a spec about"}, 400)
     if spec_running:
         return JSONResponse({"ok": False, "error": "a spec is already being generated"}, 409)
     spec_running = True
     try:
-        transcript = [u for u in _spoken(s) if u.get("kind") != "chit_chat"]
         res = await agents.generate_spec(s.meeting, transcript, {"boards": boards}, s.questions, s.disagreements)
     finally:
         spec_running = False

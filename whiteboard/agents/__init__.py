@@ -6,6 +6,7 @@
                 plus a semantic layout plan for it (LW_LAYOUT_HINTS)
   analyst       background open-questions / disagreements lists, closes stale dispute markers
   spec          on request (Export menu): a Markdown spec of the system/process the meeting designed
+  summary       at meeting end: a Markdown meeting summary of the whole conversation, credited to speakers
 
 Prompt texts live in `prompts/` (one module per agent), JSON schemas in `schemas.py`, env settings in
 `settings.py`, the model clients and the call wrapper in `llm.py`.
@@ -24,20 +25,21 @@ from .extractor_jev import build_jev_request, extract_jev, jev_to_extraction
 from .llm import CallResult, call_json, warmup
 from .modeller import build_modeller_user, model
 from .schemas import (ANALYST_SCHEMA, CONSOLIDATOR_SCHEMA, EXTRACTOR_SCHEMA, FLAT_OP, KINDS, LAYOUT_SCHEMA,
-                      MODELLER_SCHEMA, OP_SCHEMAS, SPEC_SCHEMA, clean_ops)
+                      MODELLER_SCHEMA, OP_SCHEMAS, SPEC_SCHEMA, SUMMARY_SCHEMA, clean_ops)
 from .settings import (ANALYST_EFFORT, CONSOLIDATOR_EFFORT, CONSOLIDATOR_MODEL, CONSOLIDATOR_THINKING,
                        EXTRACTOR_BACKEND, EXTRACTOR_EFFORT, EXTRACTOR_MODEL, EXTRACTOR_THINKING, JEV_MODEL,
                        LAYOUT_HINTS, MAX_TOKENS, MODEL, MODELLER_EFFORT, MODELLER_MODEL, MODELLER_THINKING,
-                       SPEC_EFFORT)
+                       SPEC_EFFORT, SUMMARY_EFFORT)
 from .spec import build_spec_user, generate_spec
+from .summary import build_summary_user, generate_summary
 
 __all__ = [
-    "extract", "extract_jev", "model", "consolidate", "analyse", "generate_spec", "warmup", "CallResult",
-    "call_json", "build_extractor_user", "build_jev_request", "jev_to_extraction", "build_modeller_user",
-    "build_consolidator_user", "build_analyst_user", "build_spec_user", "is_live_speech", "clean_ops",
+    "extract", "extract_jev", "model", "consolidate", "analyse", "generate_spec", "generate_summary", "warmup",
+    "CallResult", "call_json", "build_extractor_user", "build_jev_request", "jev_to_extraction", "build_modeller_user",
+    "build_consolidator_user", "build_analyst_user", "build_spec_user", "build_summary_user", "is_live_speech", "clean_ops",
     "EXTRACTOR_SCHEMA", "MODELLER_SCHEMA", "CONSOLIDATOR_SCHEMA", "LAYOUT_SCHEMA", "ANALYST_SCHEMA", "SPEC_SCHEMA",
-    "FLAT_OP", "OP_SCHEMAS", "KINDS",
+    "SUMMARY_SCHEMA", "FLAT_OP", "OP_SCHEMAS", "KINDS",
     "MODEL", "MAX_TOKENS", "EXTRACTOR_BACKEND", "EXTRACTOR_MODEL", "EXTRACTOR_EFFORT", "EXTRACTOR_THINKING",
     "MODELLER_MODEL", "MODELLER_EFFORT", "MODELLER_THINKING", "CONSOLIDATOR_MODEL", "CONSOLIDATOR_EFFORT",
-    "CONSOLIDATOR_THINKING", "ANALYST_EFFORT", "SPEC_EFFORT", "JEV_MODEL", "LAYOUT_HINTS",
+    "CONSOLIDATOR_THINKING", "ANALYST_EFFORT", "SPEC_EFFORT", "SUMMARY_EFFORT", "JEV_MODEL", "LAYOUT_HINTS",
 ]

@@ -15,7 +15,7 @@ import os
 import time
 from typing import Any
 
-from . import agents
+from . import agents, export
 from .board import slug
 
 log = logging.getLogger("session")
@@ -121,8 +121,38 @@ class AgentPipeline:
             await self.analyst_task
         self.status = "finished"
         await self.emit_status()
+        await self._write_summary()
         self._save_run(complete=True)
         await self.emit({"type": "run_saved", "file": self.run_file}, record=False)
+
+    async def _write_summary(self) -> None:
+        """Meeting over: the summarizer's meeting summary of the whole conversation (every finished utterance,
+        small talk too, with who said it). Recorded at the time of the event before it, so replay shows it right
+        away instead of waiting as long as the model took. A failed summary is only reported; the run is saved
+        either way."""
+        try:
+            transcript = [u for u in self.view_transcript if u.get("done")]
+            if all(u.get("kind") == "chit_chat" for u in transcript):   # nothing said, or only small talk
+                return
+            t = self.timeline[-1]["t"] if self.timeline else None
+            await self.emit({"type": "summary_writing"}, record=False)
+            res = await agents.generate_summary(self.meeting, transcript, self.view_board.get("boards", []),
+                                                self.questions, self.disagreements)
+            if self.status != "finished":   # talk live continued meanwhile: this summary is already out of date
+                return
+            if not res.data:
+                log.warning("summary failed: %s", res.error or "no output")
+                await self.emit({"type": "error", "error": f"Meeting summary failed: {res.error or 'no output'}"},
+                                record=False)
+                return
+            summary = {"title": res.data["title"], "markdown": res.data["markdown"],
+                       "filename": f"{export.slug(self.meeting.get('title'))}-summary.md"}
+            await self.emit({"type": "summary", "summary": summary, **({"t": t} if t is not None else {})})
+            log.info("summary %5dms %s", res.latency_ms, summary["title"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("summary crashed")
 
     async def _run_modeller(self, items: list[dict]) -> None:
         batch_ids = {i["utt"]["id"] for i in items}

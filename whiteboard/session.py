@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import agents
+from . import agents, export
 from .approvals import DEFAULT_APPROVAL_MODE, ApprovalGate
 from .board import BoardState
 from .pipeline import AgentPipeline
@@ -102,6 +102,7 @@ class Session(AgentPipeline, ApprovalGate):
         self.approvals: list[dict] = []            # destructive ops waiting for a person (ask mode)
         self._approval_seq = 0
         self.kept_by_person: set[tuple] = set()    # (board, node, "remove_node") / (board, nodes, "merge") a person kept
+        self.summary: dict | None = None        # {title, markdown, filename}, written when the meeting ends
         # client snapshot view (built from emitted events, works for live and replay)
         self.view_transcript: list[dict] = []
         self.view_activity: list[dict] = []
@@ -119,11 +120,18 @@ class Session(AgentPipeline, ApprovalGate):
             "type": "snapshot", "mode": self.mode, "status": self.status, "speed": self.clock.speed,
             "meeting": self._meeting_public(), "transcript": self.view_transcript,
             "activity": self.view_activity[-150:], "board": self.view_board,
-            "questions": self.questions, "disagreements": self.disagreements,
+            "questions": self.questions, "disagreements": self.disagreements, "summary": self.summary,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
             "mic": self.source.public_state() if self.source else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
         }
+
+    def spec_inputs(self) -> tuple[list[dict], list[dict]]:
+        """What the spec writer reads: every board, and the finished non-chit-chat transcript. From the client
+        view, so it works for live, talk-live and replay."""
+        boards = export.board_json(self.meeting, self.view_board)["boards"]
+        transcript = [u for u in self.view_transcript if u.get("done") and u.get("kind") != "chit_chat"]
+        return boards, transcript
 
     def _meeting_public(self) -> dict:
         m = self.meeting
@@ -179,6 +187,8 @@ class Session(AgentPipeline, ApprovalGate):
             self.disagreements = ev["disagreements"]
         elif t == "approvals":
             self.view_approvals = ev["pending"]
+        elif t == "summary":
+            self.summary = ev["summary"]
         elif t == "status":
             self.status = ev["status"]
 
@@ -230,6 +240,7 @@ class Session(AgentPipeline, ApprovalGate):
         self.source.rearm()                 # same source, so utterance ids keep counting (m001, m002, ...)
         self.speech_done = False
         self.pending_event = asyncio.Event()
+        self.summary = None                 # out of date now; the next Stop writes a new one
         self._close_idle_gap()
         self.status = "running"
         self._tasks = [asyncio.create_task(self._run_source(announce=False)),

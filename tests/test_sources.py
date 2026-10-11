@@ -50,9 +50,14 @@ def fake_pipeline(monkeypatch, tmp_path):
         calls.setdefault("consolidate", []).append(transcript[-1]["id"])
         return CallResult({"summary": "No cleanup needed", "ops": []}, 1)
 
+    async def generate_summary(meeting, transcript, boards, questions, disagreements):
+        calls.setdefault("summary", []).append([u["id"] for u in transcript])
+        return CallResult({"title": "Summary", "markdown": "## Decisions\n- x"}, 1)
+
     async def warmup():
         return None
 
+    monkeypatch.setattr(agents, "generate_summary", generate_summary)
     monkeypatch.setattr(agents, "extract", extract)
     monkeypatch.setattr(agents, "model", model)
     monkeypatch.setattr(agents, "analyse", analyse)
@@ -177,10 +182,12 @@ def test_mic_continue_after_stop_keeps_board(fake_pipeline):
         await mic.stop()
         await wait_for(lambda: s.status == "finished")
         first_file = s.run_file
+        assert s.summary and s.snapshot()["summary"] == s.summary
 
         assert not (await Session().continue_mic())["ok"]                  # nothing to continue on a fresh session
         res = await s.continue_mic()
         assert res["ok"] and s.status == "running" and s.source is mic
+        assert s.summary is None                                            # out of date until the next Stop
         assert await mic.connect() and mic.state == "listening"
         await mic.handle_event(completed("itB", "Then checkout."))
         assert [u["id"] for u in s.spoken] == ["m001", "m002"]             # ids keep counting
@@ -190,6 +197,7 @@ def test_mic_continue_after_stop_keeps_board(fake_pipeline):
         assert set(s.board.boards[s.board.active]["nodes"]) == {"n_m001", "n_m002"}
         assert s.run_file == first_file                                     # same run file, saved again
         assert [e["type"] for e in s.timeline].count("meeting") == 1
+        assert fake_pipeline["summary"] == [["m001"], ["m001", "m002"]]     # a new summary at every Stop
         return s.run_file
 
     run_file = asyncio.run(run())

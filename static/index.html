@@ -98,6 +98,7 @@
               <button role="menuitem" data-export="json">{ } Board data, JSON <span>all boards</span></button>
               <button role="menuitem" data-export="mermaid">🧜 Mermaid <span>all boards</span></button>
               <button role="menuitem" data-export="spec" id="btnSpec">✨ Generate spec… <span>AI, short</span></button>
+              <button role="menuitem" data-export="summary" id="btnSummary" title="Written by itself when the meeting ends" disabled>📝 Meeting summary <span>after the meeting</span></button>
             </div>
           </div>
         </div>
@@ -167,7 +168,7 @@
     </section>
   </main>
 
-  <!-- Generated spec (Export -> Generate spec) -->
+  <!-- Generated spec (Export -> Generate spec) and the meeting-end summary (Export -> Meeting summary) -->
   <div class="modal" id="specModal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="specTitle">
       <div class="modal-head">

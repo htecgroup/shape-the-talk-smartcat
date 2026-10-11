@@ -12,8 +12,8 @@ Sources, in order of trust: the boards (the agreed model), the transcript (detai
 Write GitHub Markdown in `markdown`, with only these sections:
 - "## Overview": what is being designed and why, 2-3 sentences.
 - "## Key parts": one bullet per main component, step or actor (whichever the boards show), one line each: what it is and what it does. At most 8 bullets.
-- "## Decisions": what was agreed, one line each.
-- "## Open questions": unresolved questions and open disagreements, one line each.
+- "## Decisions": what was agreed, one line each, ending with who proposed or settled it, e.g. "Payments go through a gateway (Ana)".
+- "## Open questions": unresolved questions and open disagreements, one line each, ending with who raised it, e.g. "(asked by Marko)".
 - "## Action items": "<who>: <task>", only if someone took or was given a task.
 
 Rules:
