@@ -1,0 +1,17 @@
+{
+  "name": "shapethetalk",
+  "version": "0.1.0",
+  "description": "Claude draws and live-edits a whiteboard diagram in a pane beside the conversation (ShapeTheTalk, hand-drawn on the desktop).",
+  "author": {
+    "name": "Emanuilo Jovanovic"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "agentTool": {
+      "type": "boolean",
+      "title": "Give the agent browser_open / browser_close tools for the terminal-browser pane",
+      "description": "Adds open/close tools the model can call to show a page in the terminal-browser pane (vendored from zenbu-labs/terminal-browser). Off by default.",
+      "default": false
+    }
+  }
+}
