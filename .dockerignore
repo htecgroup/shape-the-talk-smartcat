@@ -1,0 +1,27 @@
+# Patterns without trailing slashes or **: `az acr build` filters the upload with its own, simpler matcher.
+
+# Secrets: never in the image
+.env
+.env.*
+!.env.example
+
+# Local tooling and caches
+.venv
+.git
+.gitignore
+.claude
+__pycache__
+*/__pycache__
+*/*/__pycache__
+*.pyc
+.pytest_cache
+.DS_Store
+
+# Not needed at runtime
+tests
+claude-mod
+docs
+*.md
+Dockerfile
+.dockerignore
+runs/*_partial.json
