@@ -33,6 +33,15 @@ The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` a
 `gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits an utterance
 after 700 ms of quiet.
 
+## Custom vocabulary
+
+Speech-to-text (Teams captions especially, which take no custom vocabulary) mishears product names: "Geoff classifier"
+for JEV classifier, "cloud code" for Claude Code. `data/vocabulary.json` maps each correct spelling to its misheard
+variants (case-insensitive, whole words). The server fixes them in the transcript before the viewers and the agents see
+it, for every mode, and lists the terms as KNOWN TERMS in the modeller, consolidator and extractor prompts, so the board
+is spelled right even when a variant slips through (e.g. split over two Teams chunks). Keep variants of real words
+multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to another file; read at server start.
+
 ## Controls
 
 - Mode toggle, Start, Pause/Resume (space), speed 1×/2×/4× (replay), Reset, run picker, board tabs.

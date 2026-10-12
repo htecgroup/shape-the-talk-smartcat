@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from .. import vocabulary
 from .context import is_live_speech, line, participants
 from .llm import CallResult, call_json
 from .prompts.modeller import FIRST_BOARD_LIVE, FIRST_BOARD_SCRIPTED, MODELLER_SPEECH_NOTES, MODELLER_SYSTEM
@@ -31,7 +32,7 @@ def build_modeller_user(board_compact: dict, window: list[dict], new_items: list
 async def model(meeting: dict, board_compact: dict, window: list[dict], new_items: list[dict]) -> CallResult:
     live = is_live_speech(meeting)
     system = MODELLER_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
-                                    participants=participants(meeting),
+                                    participants=participants(meeting), known_terms=vocabulary.prompt_section(),
                                     first_board=FIRST_BOARD_LIVE if live else FIRST_BOARD_SCRIPTED,
                                     speech_notes=MODELLER_SPEECH_NOTES if live else "")
     user = build_modeller_user(board_compact, window, new_items)

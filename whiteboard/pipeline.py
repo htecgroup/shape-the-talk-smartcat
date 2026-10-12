@@ -15,7 +15,7 @@ import os
 import time
 from typing import Any
 
-from . import agents, export
+from . import agents, export, vocabulary
 from .board import slug
 
 log = logging.getLogger("session")
@@ -30,7 +30,9 @@ CONSOLIDATOR_BLOCKED = {"new_board", "switch_board", "undo"}     # the consolida
 class AgentPipeline:
     # ------------------------------------------------------------ extractor
     async def submit_utterance(self, public: dict, speech_end_t: float | None = None) -> None:
-        """Hand one finished utterance {id, speaker, text} to the pipeline (any source)."""
+        """Hand one finished utterance {id, speaker, text} to the pipeline (any source). Misheard product names
+        in its text are fixed here (data/vocabulary.json), so every agent reads the corrected text."""
+        public = {**public, "text": vocabulary.fix(public["text"])}
         context = list(self.spoken)
         self.spoken.append(public)
         if self.mode == "mic":

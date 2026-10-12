@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import agents, export
+from . import agents, export, vocabulary
 from .approvals import DEFAULT_APPROVAL_MODE, ApprovalGate
 from . import attendee
 from .attendee import AttendeeSource
@@ -156,6 +156,7 @@ class Session(AgentPipeline, ApprovalGate):
 
     # -------------------------------------------------------------- broadcast
     async def emit(self, event: dict, record: bool = True) -> None:
+        event = _fix_vocabulary(event)
         if "t" not in event:
             event["t"] = round(time.perf_counter() - self.t0, 3)
         self._reduce(event)
@@ -356,3 +357,18 @@ class Session(AgentPipeline, ApprovalGate):
         name = save_run(self, complete)
         if name is not None:
             self.run_file = name
+
+
+def _fix_vocabulary(event: dict) -> dict:
+    """Transcript text as the viewers see it, with misheard product names fixed (data/vocabulary.json). Every source
+    shows its text through these events, so this one place covers them all; a copy, as the source may keep the dict."""
+    t = event.get("type")
+    if t == "utterance_start" and isinstance(event.get("utt"), dict) and event["utt"].get("text"):
+        fixed = vocabulary.fix(event["utt"]["text"])
+        if fixed != event["utt"]["text"]:
+            return {**event, "utt": {**event["utt"], "text": fixed}}
+    elif t in ("utterance_interim", "utterance_final") and event.get("text"):
+        fixed = vocabulary.fix(event["text"])
+        if fixed != event["text"]:
+            return {**event, "text": fixed}
+    return event
