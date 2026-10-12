@@ -24,14 +24,15 @@ The server still supports scripted meetings (`data/meeting_*.json`) for `scripts
 
 1. Click **🎙 Talk live**, optionally enter your name and what you're designing, then **🎙 Start talking** (the mic needs
    `localhost` or https).
-2. Talk in short thoughts with small pauses. Interim text appears while you speak; an utterance is final about 1.3 s
-   after you pause. "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
+2. Talk in short thoughts with small pauses. Interim text appears while you speak and goes to the agents in pieces
+   while you talk: at a sentence end, every 6 words (`LW_MIC_CHUNK_WORDS`), or after a 0.8 s pause (`LW_MIC_PAUSE_S`). "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
 3. **■ Stop** flushes the last utterance, runs the final cleanup and analysis, writes the meeting summary and saves the
    run for Replay.
 
 The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` and the server talks to OpenAI.
-`gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits an utterance
-after 700 ms of quiet.
+`gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits a segment
+after 700 ms of quiet; its final transcript sends only what is left and fixes the earlier pieces on screen. Server-VAD
+models stream no text mid-speech, so their segments go out whole.
 
 ## Custom vocabulary
 

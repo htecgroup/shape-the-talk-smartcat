@@ -108,7 +108,8 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 - **LLM variance:** runs differ in small ways; the guards and validation contain the damage.
 - **Latency:** about 4 s from end of speech to board update in talk live (≈1.3 s transcription + extractor + modeller).
 - **No diarization at the microphone:** everyone at the microphone is one speaker (Teams mode labels speakers).
-- **Pause-based utterances:** a mid-sentence pause splits a sentence in two; someone who never pauses is cut at 20–40 s.
+- **Chunked utterances:** talk live and Teams send a running transcript in pieces (sentence ends, every 6 words, short
+  pauses), so a sentence can reach the agents split; the modeller and consolidator repair the board when the rest arrives.
 - **Batching:** when utterances arrive faster than the modeller, an utterance retracted within the same batch is never drawn.
 - **Rooms, not accounts:** anyone with a room's link can watch and control its board; no auth, English only. Rooms
   live in memory (a restart empties them) and one server process holds them all.

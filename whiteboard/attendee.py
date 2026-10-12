@@ -16,7 +16,7 @@ at a sentence end, every LW_TEAMS_CHUNK_WORDS (6) stable words, mid-sentence too
 partials, as Teams revises recent words; the modeller and consolidator repair the board when the rest arrives), or
 after LW_TEAMS_PAUSE_S without a new partial (if 3+ words or a clause wait). The final caption sends only what is
 left. Words Teams revises after they were sent are corrected on screen but not sent again (sent words are aligned
-to the new text).
+to the new text). The cutting helpers (`next_cut`, `aligned_end`) live in chunking.py, shared with talk live.
 transcript.update of a caption seen on the partial stream (same speaker_uuid and timestamp_ms) is ignored, or
 finishes it if its final partial was lost; without partials (unpatched Attendee, openai transcription) each
 transcript.update is one utterance, as before.
@@ -31,19 +31,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import difflib
 import hashlib
 import hmac
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import httpx2
 
+from .chunking import CLAUSE_END, PAUSE_MIN_WORDS, _norm, aligned_end, next_cut  # noqa: F401 (shared with talk live)
 from .sources import DEFAULT_TOPIC, is_meaningless
 
 if TYPE_CHECKING:
@@ -64,9 +63,6 @@ WEBHOOK_PATH = "/api/attendee/webhook"
 TRIGGERS = ["transcript.update", "transcript.partial", "participant_events.join_leave", "bot.state_change"]
 CHUNK_WORDS = int(os.getenv("LW_TEAMS_CHUNK_WORDS", "6"))      # send a running caption every this many stable words
 PAUSE_S = float(os.getenv("LW_TEAMS_PAUSE_S", "0.8"))          # ... or after this long without a new partial
-PAUSE_MIN_WORDS = 3         # a pause sends fewer words only after a clause end ("Today I" waits for the rest)
-SENTENCE_END = re.compile(r"[.?!…][\"')\]]*$")
-CLAUSE_END = re.compile(r"[,;:.?!…—][\"')\]]*$")
 LEAVE_TIMEOUT_S = 6.0       # how long stop() waits for the bot to report that it left
 HTTP_TIMEOUT_S = 20.0
 PARTICIPANT_COLORS = ["#e8590c", "#1971c2", "#2f9e44", "#9c36b5", "#c2255c", "#0c8599", "#f08c00", "#5f3dc4",
@@ -119,47 +115,6 @@ def verify_signature(payload: dict, signature: str | None, secret: str | None = 
         return hmac.compare_digest(sign_payload(payload, secret), signature)
     except (binascii.Error, ValueError):
         return False
-
-
-def _norm(word: str) -> str:
-    return word.strip(".,;:!?…—-\"'()[]").casefold()
-
-
-def aligned_end(sent: list[str], words: list[str]) -> int:
-    """How many of `words` (a newer caption text) the already sent words cover. Teams may have revised them
-    ("costumer" -> "customer", "ice cream" -> "ice-cream"), so the texts are aligned by characters, not counted."""
-    if not sent:
-        return 0
-    a, norm = " ".join(sent), [_norm(w) for w in words]
-    b, n, pos = " ".join(norm), len(" ".join(sent)), 0
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-        if i1 >= n:
-            break
-        if tag == "equal":
-            pos = j1 + min(n, i2) - i1
-        elif tag == "replace":
-            pos = j2 if i2 <= n else j1 + min(j2 - j1, n - i1)
-        else:                   # delete: sent text Teams dropped; insert: text Teams added in between
-            pos = j2
-    count = k = 0               # words of the new text up to pos; one cut in the middle counts if mostly covered
-    for w in norm:
-        if not (k + len(w) <= pos or pos - k >= len(w) / 2):
-            break
-        count, k = count + 1, k + len(w) + 1
-    return count
-
-
-def next_cut(words: list[str], start: int, stable: int, chunk_words: int) -> int | None:
-    """Where to cut the unsent words[start:] of a running caption, or None to wait. words[:stable] were unchanged
-    since the previous partial. A sentence end counts once Teams has moved past it (or it is stable); otherwise
-    every chunk_words stable words go out as they are, mid-sentence too: the board feels live, and the modeller
-    and consolidator repair it when the rest of the sentence arrives."""
-    for i in range(len(words) - 1, start - 1, -1):
-        if SENTENCE_END.search(words[i]) and (i < stable or i < len(words) - 1):
-            return i + 1
-    if stable - start >= chunk_words:
-        return start + chunk_words
-    return None
 
 
 @dataclass

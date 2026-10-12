@@ -145,7 +145,7 @@ async def main(a: argparse.Namespace) -> None:
             interims += 1
             first_interim.setdefault(ev["id"], wall)
         if ev.get("type") == "utterance_final":
-            finals[ev["id"]] = (wall, speech_end_before(wall))
+            finals.setdefault(ev["id"], (wall, speech_end_before(wall)))   # a later one only fixes the text on screen
     for uid, wall in first_interim.items():
         if uid in finals and finals[uid][1] is not None and (wall - t_start) < finals[uid][1]:
             interim_before_end += 1

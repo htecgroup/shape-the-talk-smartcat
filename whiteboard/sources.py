@@ -14,10 +14,13 @@ from __future__ import annotations
 import asyncio
 import bisect
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
+from . import chunking
 from .audio import EnergyVAD
+from .chunking import FILLER_ONLY, RunningCaption, is_meaningless  # noqa: F401 (re-exported)
 from .stt import BENIGN_ERRORS, RealtimeTranscriber, UpstreamError
 
 if TYPE_CHECKING:
@@ -32,7 +35,8 @@ DEFAULT_TOPIC = ("Not given. Infer what is being designed from what the speaker 
 SPEAKER_COLOR = "#e8590c"
 FLUSH_TIMEOUT_S = 5.0       # how long stop() waits for the last transcript
 PRE_CONNECT_BUFFER_S = 6.0  # audio kept while the upstream socket is still opening
-FILLER_ONLY = {"", "um", "uh", "hmm", "mm", "mhm", "ah", "oh", "okay", "ok", "so", "yeah", "right"}
+CHUNK_WORDS = int(os.getenv("LW_MIC_CHUNK_WORDS", str(chunking.CHUNK_WORDS)))   # send a segment every this many stable words
+PAUSE_S = float(os.getenv("LW_MIC_PAUSE_S", str(chunking.PAUSE_S)))           # ... or after this long without a new delta
 
 
 class ScriptedSource:
@@ -74,20 +78,17 @@ def mic_meeting(speaker: str | None, topic: str | None) -> dict:
     }
 
 
-def is_meaningless(text: str) -> bool:
-    """Empty transcripts or a lone filler word (VAD noise, a cough) never reach the pipeline."""
-    words = [w.strip(".,!?…-\"' ").lower() for w in text.split()]
-    words = [w for w in words if w]
-    return not words or (len(words) == 1 and words[0] in FILLER_ONLY)
-
-
 class MicSource:
     """Live microphone utterances.
 
-    Upstream items (one per committed audio segment) are mapped to our utterance ids
-    (m001, m002, ...). Interim text is broadcast as it streams in. Utterances are handed to
-    the pipeline strictly in the order the audio was spoken, even if OpenAI completes a later
-    segment first.
+    Each upstream item (one committed audio segment) is a running transcript, cut into utterances
+    (m001, m002, ...) while it streams in, like a Teams caption (chunking.RunningCaption): at a
+    sentence end, every LW_MIC_CHUNK_WORDS (6) stable words (deltas only append, so every word but
+    a trailing partial one is stable), or after LW_MIC_PAUSE_S (0.8 s) without a new delta. The
+    completed transcript sends only what is left and fixes the sent pieces on screen.
+    Spoken order holds: only the earliest unfinished item is cut and shown; a later item's deltas
+    wait, and it catches up when the items before it complete (even if OpenAI completes it first).
+    Server-VAD models stream no deltas mid-speech, so their items go out whole on completion.
     """
 
     kind = "mic"
@@ -106,6 +107,8 @@ class MicSource:
         self.vad = EnergyVAD()
         self.items: dict[str, dict] = {}
         self.order: list[str] = []
+        self.head: str | None = None           # the item being cut live: order[0] once it was caught up
+        self.lock = asyncio.Lock()             # upstream events, pause timers and the final flush, one at a time
         self.n = 0
         self.done = asyncio.Event()
         self.changed = asyncio.Event()
@@ -125,6 +128,8 @@ class MicSource:
 
     async def close(self) -> None:
         """Hard stop (reset): no flush."""
+        for it in self.items.values():
+            it["cap"].cancel()
         if self.tr is not None:
             await self.tr.close()
         self.done.set()
@@ -199,7 +204,8 @@ class MicSource:
                     await asyncio.wait_for(self.changed.wait(), max(0.05, deadline - time.perf_counter()))
                 except asyncio.TimeoutError:
                     break
-        await self._finalize_open("stopped before the transcript completed")
+        async with self.lock:
+            await self._finalize_open("stopped before the transcript completed")
         if self.tr is not None:
             await self.tr.close()
         await self._set_state("stopped")
@@ -252,38 +258,37 @@ class MicSource:
     def _item(self, item_id: str) -> dict:
         it = self.items.get(item_id)
         if it is None:
-            it = {"item": item_id, "id": None, "text": "", "status": "open", "speech_end": None,
-                  "started": False}
+            it = {"item": item_id, "text": "", "status": "open", "speech_end": None, "speaking": False,
+                  "cap": RunningCaption(self.session, self.speaker, self._new_id, self.lock, CHUNK_WORDS, PAUSE_S,
+                                        active=lambda: not self.done.is_set())}
             self.items[item_id] = it
             self.order.append(item_id)
         return it
 
-    async def _start_utt(self, it: dict) -> None:
-        if it["started"]:
-            return
+    def _new_id(self) -> str:
         self.n += 1
-        it["id"] = f"m{self.n:03d}"
-        it["started"] = True
-        await self.session.emit({"type": "utterance_start", "live": True,
-                                 "utt": {"id": it["id"], "speaker": self.speaker, "text": it["text"]}})
+        return f"m{self.n:03d}"
 
     async def handle_event(self, ev: dict) -> None:
+        async with self.lock:
+            await self._handle(ev)
+        self.changed.set()
+
+    async def _handle(self, ev: dict) -> None:
         t = ev.get("type", "")
         if t == "conversation.item.input_audio_transcription.delta":
             it = self._item(ev["item_id"])
             if it["status"] != "open":
                 return
             it["text"] += ev.get("delta", "")
-            if not it["started"]:
-                if not it["text"].strip():
-                    return
-                await self._start_utt(it)
-            await self.session.emit({"type": "utterance_interim", "id": it["id"], "text": it["text"].strip()})
+            if self.order[0] == ev["item_id"]:
+                self.head = ev["item_id"]
+                await self._advance(it)
         elif t == "conversation.item.input_audio_transcription.completed":
             it = self._item(ev["item_id"])
             if it["status"] == "open":
                 it["text"] = (ev.get("transcript") or "").strip()
-                it["status"] = "dropped" if is_meaningless(it["text"]) else "completed"
+                it["status"] = "completed"
                 it["completed_at"] = time.perf_counter()
                 await self._flush()
         elif t == "conversation.item.input_audio_transcription.failed":
@@ -292,7 +297,7 @@ class MicSource:
             log.warning("transcription failed for %s: %s", ev["item_id"], err)
             self.warning = f"A segment could not be transcribed: {err}"
             it["text"] = it["text"].strip()
-            it["status"] = "dropped" if is_meaningless(it["text"]) else "completed"
+            it["status"] = "completed"
             it["completed_at"] = time.perf_counter()
             await self._flush()
         elif t == "input_audio_buffer.committed":
@@ -301,7 +306,10 @@ class MicSource:
                 it["speech_end"] = self._commit_marks.pop(0)
         elif t == "input_audio_buffer.speech_started":       # server VAD mode
             it = self._item(ev["item_id"])
-            await self._start_utt(it)
+            it["speaking"] = True
+            if self.order[0] == ev["item_id"]:
+                self.head = ev["item_id"]
+                await self._advance(it)
         elif t == "input_audio_buffer.speech_stopped":       # server VAD mode
             it = self._item(ev["item_id"])
             it["speech_end"] = self._audio_to_wall(ev.get("audio_end_ms", 0) / 1000)
@@ -323,7 +331,16 @@ class MicSource:
             self._commit_marks.clear()
             await self._finalize_open("connection lost")
             await self._set_state("error", msg)
-        self.changed.set()
+
+    async def _advance(self, it: dict) -> None:
+        """Cut the head item's text so far: every word but a trailing partial one is stable (deltas only append)."""
+        text, cap = it["text"], it["cap"]
+        words = text.split()
+        if not words:
+            if it["speaking"] and cap.line is None:           # server VAD: show that someone is talking
+                await cap.open_line("")
+            return
+        await cap.update(words, len(words) if text[-1].isspace() else len(words) - 1)
 
     def _open_items(self) -> list[dict]:
         # an item only counts as pending if it has text or was committed by us
@@ -331,33 +348,30 @@ class MicSource:
                 and (self.items[i]["text"].strip() or self.items[i]["speech_end"] is not None)]
 
     async def _finalize_open(self, why: str) -> None:
-        """Keep what we heard: open items become final with their interim text."""
+        """Keep what we heard: open items become final with their interim text. Call with the lock held."""
         for item_id in self.order:
             it = self.items[item_id]
             if it["status"] == "open":
                 it["text"] = it["text"].strip()
-                it["status"] = "dropped" if is_meaningless(it["text"]) else "completed"
+                it["status"] = "completed"
                 it["completed_at"] = time.perf_counter()
                 it["from_interim"] = True
-                if it["status"] == "completed":
-                    log.info("finalised %s from interim text (%s)", it.get("id"), why)
+                if it["text"]:
+                    log.info("finalised %s from interim text (%s)", item_id, why)
         await self._flush()
 
     async def _flush(self) -> None:
-        while self.order and self.items[self.order[0]]["status"] in ("completed", "dropped"):
+        """Close completed items in spoken order, then catch up the new head with the deltas it got meanwhile."""
+        while self.order and self.items[self.order[0]]["status"] == "completed":
             it = self.items[self.order.pop(0)]
-            if it["status"] == "dropped":
-                if it["started"]:
-                    await self.session.emit({"type": "utterance_drop", "id": it["id"]})
-                continue
-            await self._start_utt(it)
-            ev = {"type": "utterance_final", "id": it["id"], "text": it["text"]}
+            final: dict[str, Any] = {}
             if it.get("from_interim"):
-                ev["from_interim"] = True
+                final["from_interim"] = True
             if it["speech_end"] is not None:
-                ev["speech_end_t"] = round(it["speech_end"] - self.session.t0, 3)
-                ev["stt_ms"] = int((it["completed_at"] - it["speech_end"]) * 1000)
-            await self.session.emit(ev)
-            log.info("final %s (stt %s ms): %s", it["id"], ev.get("stt_ms"), it["text"][:120])
-            await self.session.submit_utterance({"id": it["id"], "speaker": self.speaker, "text": it["text"]},
-                                                speech_end_t=ev.get("speech_end_t"))
+                final["speech_end_t"] = round(it["speech_end"] - self.session.t0, 3)
+                final["stt_ms"] = int((it["completed_at"] - it["speech_end"]) * 1000)
+            uid = await it["cap"].close(it["text"].split(), final)
+            log.info("final %s (stt %s ms): %s", uid, final.get("stt_ms") if uid else None, it["text"][:120])
+        if self.order and self.order[0] != self.head:
+            self.head = self.order[0]
+            await self._advance(self.items[self.head])
