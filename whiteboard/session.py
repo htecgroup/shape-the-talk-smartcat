@@ -5,9 +5,10 @@ browser microphone ("mic" mode) in whiteboard/sources.py, or an Attendee bot in 
 meeting ("teams" mode, whiteboard/attendee.py). All feed the same
 agent pipeline (whiteboard/pipeline.py) through `submit_utterance()`.
 
-One global session drives the demo. Every event that reaches the browser goes
-through `emit()`, which (a) folds it into a snapshot for late-joining clients,
-(b) appends it to the run timeline, and (c) pushes it to all WebSockets.
+One session per room (server.py keeps the registry); each has its own board, pipeline
+and viewers. Every event that reaches the browser goes through `emit()`, which
+(a) folds it into a snapshot for late-joining clients, (b) appends it to the run
+timeline, and (c) pushes it to the room's WebSockets.
 Live, mic and teams runs are saved to runs/ (whiteboard/recording.py); replay just
 re-emits a recorded timeline, so it makes no API calls.
 """
@@ -77,8 +78,12 @@ class Clock:
 
 
 class Session(AgentPipeline, ApprovalGate):
-    def __init__(self) -> None:
+    def __init__(self, room: str = "default") -> None:
+        self.room = room
         self.clients: set[Any] = set()
+        self.mic_sockets = 0                         # open /ws/mic sockets (server.py)
+        self.spec_running = False                    # one spec at a time per room (server.py)
+        self.last_active = time.monotonic()          # for dropping idle rooms (server.py)
         self.meeting = load_meeting()
         self.approval_mode = DEFAULT_APPROVAL_MODE   # a room setting: survives Reset
         self._tasks: list[asyncio.Task] = []
@@ -130,6 +135,11 @@ class Session(AgentPipeline, ApprovalGate):
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
                    else {"state": "idle", "error": attendee.config_error()},
         }
+
+    def busy(self) -> bool:
+        """Someone is connected, or something still runs: a meeting, its final cleanup and summary, a spec."""
+        return (bool(self.clients) or self.mic_sockets > 0 or self.spec_running
+                or self.status in ("running", "paused") or any(not t.done() for t in self._tasks))
 
     def spec_inputs(self) -> tuple[list[dict], list[dict]]:
         """What the spec writer reads: every board, and the finished non-chit-chat transcript. From the client

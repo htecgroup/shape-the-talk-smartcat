@@ -10,6 +10,14 @@ Setup is in the [README](../README.md#run-it). This page covers the modes, the c
 - **Replay:** plays back a recorded run from `runs/` with no API calls (demo fallback).
   `http://localhost:8010/?replay=latest` autoplays the newest complete run (`?replay=<file>.json` for a specific one).
 
+## Rooms
+
+Every visitor gets their own board: the page adds a random `?room=<id>` to its URL (the room button next to the status
+copies the link). Whoever opens the same link sees the same board live and can control it (Start, Reset, approvals).
+`?replay=latest` and `?room=` combine. Without a room (scripts, `curl /api/control`) the server uses the `default`
+room. At most `LW_MAX_ROOMS` rooms (20) are open at once; a room with no one connected and nothing running is dropped
+after 30 minutes, and its link then opens an empty board.
+
 The server still supports scripted meetings (`data/meeting_*.json`) for `scripts/simulate.py`.
 
 ## Talk live

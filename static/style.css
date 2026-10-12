@@ -77,7 +77,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .controls { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
 .controls .btn, .controls .seg button, .controls .run-select { font-size: 14px; }   /* one size across the header controls */
-.status { margin-left: auto; }
+.status { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.btn.room { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; gap: 5px; }   /* this board's room id; copies its link */
 
 .btn {
   border: 1px solid var(--line); background: #fff; color: var(--ink);

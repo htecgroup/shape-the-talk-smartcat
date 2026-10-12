@@ -7,6 +7,16 @@
   const ico = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const setLabel = (el, name, text) => { el.innerHTML = (name ? ico(name) : "") + esc(text); };
 
+  // Room: every visitor gets their own board. Without ?room= we pick one and put it in the URL, so sharing the
+  // URL shares the board (watch and control it together). The server checks the id ([a-z0-9-], at most 32).
+  const ROOM = params.get("room") || Array.from(crypto.getRandomValues(new Uint8Array(7)),
+    (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+  if (!params.get("room")) {
+    params.set("room", ROOM);
+    history.replaceState(null, "", `${location.pathname}?${params}${location.hash}`);
+  }
+  const inRoom = (path) => `${path}?room=${encodeURIComponent(ROOM)}`;
+
   const S = {
     ws: null, mode: "mic", status: "idle", speed: 1,
     participants: [], colors: {}, total: 0,
@@ -34,10 +44,11 @@
 
   // ------------------------------------------------------------------ socket
   function connect() {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${inRoom("/ws")}`);
     S.ws = ws;
     ws.onmessage = (m) => handle(JSON.parse(m.data));
-    ws.onclose = () => setTimeout(connect, 1200);
+    // the server sent the reason as an error first: 4400 bad room id (no retry), 4503 every room taken (retry slowly)
+    ws.onclose = (e) => { if (e.code !== 4400) setTimeout(connect, e.code === 4503 ? 15000 : 1200); };
   }
   const send = (msg) => S.ws && S.ws.readyState === 1 && S.ws.send(JSON.stringify(msg));
 
@@ -622,7 +633,7 @@
     showMicError(null);
     $("btnStart").disabled = true;
     $("micStateText").textContent = "Allow the microphone…";   // the browser permission prompt may be open
-    const ok = await Mic.start({ speaker, topic, resume }, {
+    const ok = await Mic.start({ speaker, topic, resume, room: ROOM }, {
       onState: (ev) => onMicState(ev),
       onLevel: (rms) => setLevel(rms),
       onError: (msg) => { S.micOwner = false; showMicError(msg); setLevel(0); updateMicUI(); },
@@ -721,8 +732,8 @@
     return `${slug(S.meetingTitle)}-${slug(b && b.title)}.${ext}`;
   }
   async function fetchExport(path) {
-    const r = await fetch(path);
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    const r = await fetch(inRoom(path));
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `${r.status} ${r.statusText}`);
     return r.blob();
   }
   function setExportMenu(open) {
@@ -744,7 +755,7 @@
     $("btnSpec").firstElementChild.innerHTML = `<svg class="i spin" aria-hidden="true"><use href="#i-loader"/></svg>Generating spec…`;
     toast("System", "Writing the spec from the boards and the transcript…");
     try {
-      const r = await fetch("/api/export/spec", { method: "POST" });
+      const r = await fetch(inRoom("/api/export/spec"), { method: "POST" });
       const res = await r.json().catch(() => ({ ok: false, error: `${r.status} ${r.statusText}` }));
       if (!res.ok) return toast("System", res.error || "Spec generation failed");
       openSpec(res);
@@ -825,6 +836,16 @@
       return;
     }
     if (e.code === "Space") { e.preventDefault(); if (S.status === "running" || S.status === "paused") $("btnPause").click(); else $("btnStart").click(); }
+  });
+
+  $("roomId").textContent = ROOM;
+  $("btnRoom").addEventListener("click", async () => {
+    try {  // navigator.clipboard is missing over plain http:// on a LAN IP
+      await navigator.clipboard.writeText(location.href);
+      toast("System", "Link copied. Whoever opens it sees and controls this board");
+    } catch {
+      toast("System", `Share this board: ${location.href}`);
+    }
   });
 
   setMode(S.autoReplay ? "replay" : "mic");

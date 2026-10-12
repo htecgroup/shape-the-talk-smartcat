@@ -47,6 +47,16 @@ that replaces old ones) is held whole as one Merge card, so the board never show
 applies what is still waiting. The mode is a room setting (survives Reset; start value `LW_APPROVAL_MODE`). Which ops
 need approval is the `DESTRUCTIVE` set in `whiteboard/approvals.py`.
 
+## Rooms
+
+`server.py` keeps one `Session` per room (`?room=<id>`, `[a-z0-9-]{1,32}`) in `rooms`, created on first use: the page,
+both sockets, `/api/state`, `/api/control` and `/api/export/*` all take the room, and no room means `default`. Each
+session has its own board, pipeline, approvals, spec guard and viewers, so a command or event never leaves its room.
+Attendee posts every bot's webhooks to one URL; the server hands each to the room whose bot has that `bot_id`. A
+background sweep (every minute, and when the cap is hit) drops a room after 30 minutes without viewers, mic socket,
+running meeting, final summary or spec, through `Session.reset()` (closes the source, cancels its tasks).
+`LW_MAX_ROOMS` caps the rooms (the default room is extra); past it a new room is refused with a message the page shows.
+
 ## The renderer
 
 Five node types (actor, system, step, decision, data) plus tasks, hand-drawn with a stable wobble; `ghost` proposals are
@@ -75,7 +85,7 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 
 | Path | What it holds |
 |---|---|
-| `server.py` | FastAPI app: static files, `/ws` (push + commands), `/ws/mic` (audio in), `/api/attendee/webhook`, `/api/state`, `/api/runs`, `/api/control` |
+| `server.py` | FastAPI app: rooms, static files, `/ws` (push + commands), `/ws/mic` (audio in), `/api/attendee/webhook`, `/api/state`, `/api/runs`, `/api/control` |
 | `whiteboard/session.py` | `Session`: state, snapshot, broadcasting, controls, replay |
 | `whiteboard/pipeline.py` | Agent workers: extractor fan-out, batched modeller, analyst and consolidator scheduling, op guards |
 | `whiteboard/approvals.py` | Approval modes: holds destructive ops in Ask-first mode, applies or drops them on a decision |
@@ -100,4 +110,5 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 - **No diarization at the microphone:** everyone at the microphone is one speaker (Teams mode labels speakers).
 - **Pause-based utterances:** a mid-sentence pause splits a sentence in two; someone who never pauses is cut at 20–40 s.
 - **Batching:** when utterances arrive faster than the modeller, an utterance retracted within the same batch is never drawn.
-- **One global session:** one meeting at a time for every browser, no auth, English only.
+- **Rooms, not accounts:** anyone with a room's link can watch and control its board; no auth, English only. Rooms
+  live in memory (a restart empties them) and one server process holds them all.

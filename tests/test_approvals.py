@@ -98,11 +98,11 @@ def test_proposal_dropped_when_node_disappears():
 def test_mode_command_survives_reset():
     async def run():
         import server
-        server.session = Session()
+        server.rooms[server.DEFAULT_ROOM] = Session()
         assert (await handle_command({"cmd": "approval_mode", "mode": "ask"}))["ok"]
         assert not (await handle_command({"cmd": "approval_mode", "mode": "yolo"}))["ok"]
         await handle_command({"cmd": "reset"})
-        return server.session
+        return server.rooms.pop(server.DEFAULT_ROOM)
     s = asyncio.run(run())
     assert s.approval_mode == "ask" and s.snapshot()["approval_mode"] == "ask"
 
