@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/logo.jpeg" alt="Shape the Talk" width="480">
+  <img src="docs/logo.jpeg" alt="Shape the Talk" width="600">
 </p>
 
 <p align="center"><b>Your meeting draws its own whiteboard.</b><br>
