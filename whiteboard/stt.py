@@ -1,7 +1,7 @@
 """OpenAI Realtime API, transcription mode, over a raw WebSocket.
 
 The key stays on the server: the browser streams PCM16 to our /ws/mic endpoint and
-this client forwards it upstream. See README "Talk live" for the model probe results.
+this client forwards it upstream. See docs/FINDINGS.md for the model probe results.
 
 Two segmentation modes:
 - "local": the model streams text while the person speaks but does not accept turn
