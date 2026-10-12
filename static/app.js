@@ -537,7 +537,7 @@
     // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
     $("teamsFields").hidden = $("botHint").hidden = running;
     $("btnTeamsPause").hidden = !running || (st !== "in_meeting" && st !== "paused");
-    $("btnTeamsPause").textContent = st === "paused" ? "▶ Resume" : "❚❚ Pause";
+    setLabel($("btnTeamsPause"), st === "paused" ? "play" : "pause", st === "paused" ? "Resume" : "Pause");
     const btn = $("btnTeamsJoin");
     if (!running) {
       btn.disabled = !!S.bot.error && st === "idle";      // missing Attendee settings: nothing to start yet
