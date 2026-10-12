@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="static/logo.jpeg" alt="Shape the Talk" width="160">
+  <img src="static/logo.jpeg" alt="Shape the Talk" width="480">
 </p>
-
-<h1 align="center">Shape the Talk</h1>
 
 <p align="center"><b>Your meeting draws its own whiteboard.</b><br>
 Hackathon project by <b>Team SmartCat</b></p>
