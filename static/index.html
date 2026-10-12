@@ -49,8 +49,7 @@
 
     <div class="controls">
       <div class="seg" id="modeSeg" role="group" aria-label="Mode">
-        <button data-mode="live" class="on" title="Replay the scripted 4-person meeting through the AI pipeline">Simulated (AI)</button>
-        <button data-mode="mic" title="Talk into your microphone; the board builds from what you say"><svg class="i"><use href="#i-mic"/></svg>Talk live</button>
+        <button data-mode="mic" class="on" title="Talk into your microphone; the board builds from what you say"><svg class="i"><use href="#i-mic"/></svg>Talk live</button>
         <button data-mode="teams" title="A bot joins a Microsoft Teams meeting and the board builds from what everyone says"><svg class="i"><use href="#i-users"/></svg>Teams meeting</button>
         <button data-mode="replay">Replay</button>
       </div>
@@ -108,7 +107,7 @@
         <div class="mic-hint" id="botHint">A bot named “Whiteboard” joins the meeting. If it waits in the lobby, admit it. Speakers show up with their Teams names. With a breakout room, the bot moves there when the room opens; someone in the room admits it.</div>
       </div>
       <div class="participants" id="participants"></div>
-      <div class="panel-head small"><h3>Live transcript</h3><span class="sub" id="transcriptSub">simulated · no audio</span></div>
+      <div class="panel-head small"><h3>Live transcript</h3><span class="sub" id="transcriptSub">live microphone · OpenAI realtime</span></div>
       <div class="transcript" id="transcript">
         <div class="empty" id="transcriptEmpty">Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.</div>
       </div>

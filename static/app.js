@@ -8,7 +8,7 @@
   const setLabel = (el, name, text) => { el.innerHTML = (name ? ico(name) : "") + esc(text); };
 
   const S = {
-    ws: null, mode: "live", status: "idle", speed: 1,
+    ws: null, mode: "mic", status: "idle", speed: 1,
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
@@ -827,7 +827,7 @@
     if (e.code === "Space") { e.preventDefault(); if (S.status === "running" || S.status === "paused") $("btnPause").click(); else $("btnStart").click(); }
   });
 
-  if (S.autoReplay) setMode("replay");
+  setMode(S.autoReplay ? "replay" : "mic");
   renderTabs();
   connect();
 })();
