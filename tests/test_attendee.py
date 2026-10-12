@@ -126,6 +126,12 @@ def test_start_needs_config_and_a_link(fake_pipeline, monkeypatch):
     asyncio.run(run())
 
 
+def test_idle_bot_status_carries_the_configured_name(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(attendee, "BOT_NAME", "Klaudije Antropić")
+    bot = Session().snapshot()["bot"]
+    assert bot["state"] == "idle" and bot["bot_name"] == "Klaudije Antropić"
+
+
 def test_create_bot_request(teams, monkeypatch):
     monkeypatch.setattr(attendee, "TEAMS_LOGIN", True)
 

@@ -542,6 +542,7 @@
     $("botStateText").textContent = st === "joining" && room
       ? `Joining · moves to “${room}” when it opens`
       : (BOT_TEXT[st] || st).replace("Whiteboard", name);
+    $("botHintName").textContent = name;
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
     $("teamsUrl").disabled = $("teamsRoom").disabled = running;
