@@ -48,6 +48,7 @@ def teams(fake_pipeline, monkeypatch):
     monkeypatch.setattr(attendee, "API_KEY", "key")
     monkeypatch.setattr(attendee, "WEBHOOK_SECRET", SECRET)
     monkeypatch.setattr(attendee, "PUBLIC_URL", "https://wb.example.com")
+    monkeypatch.setattr(attendee, "START_PAUSED", False)      # these tests listen from the start; see "start paused" below
     http = FakeHttp()
     monkeypatch.setattr(AttendeeSource, "_http", lambda self: http)
     fake_pipeline["http"] = http
@@ -556,5 +557,228 @@ def test_stop_sends_captions_that_are_still_running(teams, monkeypatch):
         await s.stop_meeting()
         await wait_for(lambda: s.status == "finished")
         assert texts(s) == ["One last thing about"]
+
+    asyncio.run(run())
+
+
+# ------------------------------------------------------------------ start paused (LW_TEAMS_START_PAUSED)
+class AttendeeHttp(FakeHttp):
+    """Answers pause/resume like Attendee; `refuse_pause` pause calls are refused first (bot not recording yet)."""
+    refuse_pause = 0
+
+    async def post(self, url, json=None):
+        self.calls.append((url, json))
+        if url.endswith("/pause_recording"):
+            if self.refuse_pause > 0:
+                self.refuse_pause -= 1
+                r = FakeResponse({"error": "Bot is in state joined_not_recording and cannot pause recording"})
+                r.status_code = 400
+                return r
+            return FakeResponse({"id": BOT, "state": "joined_recording_paused"})
+        if url.endswith("/resume_recording"):
+            return FakeResponse({"id": BOT, "state": "joined_recording"})
+        return FakeResponse({"id": BOT, "state": "joining"})
+
+
+@pytest.fixture
+def paused_teams(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "START_PAUSED", True)
+    teams["http"].__class__ = AttendeeHttp
+    return teams
+
+
+def actions(teams):
+    return [url.rsplit("/", 1)[-1] for url, _ in teams["http"].calls[1:]]     # after the create call
+
+
+def test_start_paused_drops_transcripts_until_resume(paused_teams):
+    paused_teams["http"].refuse_pause = 99                 # Attendee never pauses: the local gate alone holds
+
+    async def run():
+        s = Session()
+        viewer = FakeWS()
+        s.clients.add(viewer)
+        src = await start_teams(s)
+        assert src.state == "joining" and s.snapshot()["bot"]["listening"] is False     # the UI says: will start paused
+        join = hook("participant_events.join_leave", {"participant_name": "Maja", "event_type": "join"}, "j1")
+        await src.handle_webhook(join)                                      # joins still count
+        await src.handle_webhook(state("joined_recording", "s1"))
+        assert src.state == "paused" and not src.attendee_paused           # shown paused even though Attendee is not
+        await src.handle_webhook(transcript("Stefan", "Can everyone hear me?", 500, "t0"))
+        await src.handle_webhook(partial("Nikola", "c1", 1, "Is the bot here?", final=True))
+        await asyncio.sleep(0.2)
+        assert s.spoken == [] and s.view_transcript == []
+        assert not any(e["type"].startswith("utterance") for e in viewer.events)
+        assert [p["name"] for p in s.meeting["participants"]] == ["Maja"]   # nobody added by what they said
+        assert (await s.set_listening(True))["ok"]
+        assert "resume_recording" not in actions(paused_teams)             # Attendee was never paused
+        assert src.state == "in_meeting" and src.listening
+        await src.handle_webhook(transcript("Stefan", "Let's start with orders.", 2000, "t1"))
+        await wait_for(lambda: texts(s) == ["Let's start with orders."])
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_start_paused_pauses_the_bot_in_attendee_and_resume_resumes_it(paused_teams):
+    async def run():
+        s = Session()
+        viewer = FakeWS()
+        s.clients.add(viewer)
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_not_recording", "s0"))
+        assert actions(paused_teams) == [] and src.state == "paused"
+        await src.handle_webhook(state("joined_recording", "s1"))
+        assert actions(paused_teams) == ["pause_recording"]
+        assert src.attendee_paused and src.state == "paused" and s.snapshot()["bot"]["state"] == "paused"
+        await src.handle_webhook(state("joined_recording_paused", "s2"))
+        await src.handle_webhook(state("joined_recording", "s3"))      # resumed elsewhere: not paused again, the gate holds
+        assert actions(paused_teams) == ["pause_recording"] and src.state == "paused"
+        await src.handle_webhook(state("joined_recording_paused", "s4"))
+        assert (await s.set_listening(True))["ok"]
+        assert actions(paused_teams) == ["pause_recording", "resume_recording"]
+        assert src.state == "in_meeting" and src.listening
+        # after the first resume, Pause and Resume work as before (through Attendee)
+        assert (await s.set_listening(False))["ok"] and src.state == "paused" and src.listening
+        assert (await s.set_listening(True))["ok"] and src.state == "in_meeting"
+        assert actions(paused_teams)[-2:] == ["pause_recording", "resume_recording"]
+        assert [e["state"] for e in viewer.events if e["type"] == "bot_state"][-3:] == ["in_meeting", "paused", "in_meeting"]
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_refused_auto_pause_is_retried_on_the_next_state_change(paused_teams):
+    paused_teams["http"].refuse_pause = 1
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        assert actions(paused_teams) == ["pause_recording"] and not src.attendee_paused and src.state == "paused"
+        await src.handle_webhook(state("joined_not_recording", "s2"))
+        await src.handle_webhook(state("joined_recording", "s3"))
+        assert actions(paused_teams) == ["pause_recording", "pause_recording"] and src.attendee_paused
+        await src.handle_webhook(state("joined_recording", "s4"))
+        assert actions(paused_teams) == ["pause_recording", "pause_recording"]      # once it worked, never again
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_auto_pause_when_the_create_response_is_already_recording(paused_teams):
+    class Recording(AttendeeHttp):
+        async def post(self, url, json=None):
+            if url == "/api/v1/bots":
+                self.calls.append((url, json))
+                return FakeResponse({"id": BOT, "state": "joined_recording"})
+            return await super().post(url, json)
+
+    paused_teams["http"].__class__ = Recording
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await wait_for(lambda: src.attendee_paused)
+        assert actions(paused_teams) == ["pause_recording"] and src.state == "paused"
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_caption_running_at_resume_sends_only_the_words_after_it(paused_teams, monkeypatch):
+    monkeypatch.setattr(attendee, "PAUSE_S", 5)
+    paused_teams["http"].refuse_pause = 99                 # local gate: the caption's partials arrive while gated
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await grow(src, "Maja", "c1", ["Hello is", "Hello is this thing on"])
+        assert s.view_transcript == []
+        assert (await s.set_listening(True))["ok"]
+        await grow(src, "Maja", "c1", ["Hello is this thing on. Okay so the order", "Hello is this thing on. Okay so the order goes to the kitchen"],
+                   start_seq=3)
+        await src.handle_webhook(partial("Maja", "c1", 5, "Hello is this thing on. Okay so the order goes to the kitchen.", final=True))
+        await src.handle_webhook(final_update("Maja", "Hello is this thing on. Okay so the order goes to the kitchen.", 1000, "u1"))
+        assert " ".join(texts(s)) == "Okay so the order goes to the kitchen."
+        assert not any("Hello" in u["text"] for u in s.view_transcript)
+        assert [p["name"] for p in s.meeting["participants"]] == ["Maja"]
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_caption_finished_while_gated_never_leaks(paused_teams):
+    paused_teams["http"].refuse_pause = 99
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await src.handle_webhook(partial("Maja", "c1", 1, "Testing one two.", final=True, ts=1000))
+        await src.handle_webhook(final_update("Nikola", "Can you see my screen?", 1500, "u0"))
+        assert (await s.set_listening(True))["ok"]
+        await src.handle_webhook(final_update("Maja", "Testing one two.", 1000, "u1"))          # late update
+        await src.handle_webhook(partial("Nikola", "c2", 1, "Can you see my screen?", final=True, ts=1500))   # late partial
+        await src.handle_webhook(final_update("Maja", "Now we begin.", 3000, "u2"))
+        assert texts(s) == ["Now we begin."]
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_caption_spanning_the_resume_of_a_paused_attendee_does_not_leak(paused_teams, monkeypatch):
+    """Attendee drops captions while paused, so a caption running at the resume first arrives with its earlier words."""
+    monkeypatch.setattr(attendee, "PAUSE_S", 5)
+    monkeypatch.setattr(attendee, "RESUME_SETTLE_S", 0.3)
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        assert src.attendee_paused
+        assert (await s.set_listening(True))["ok"]
+        await src.handle_webhook(partial("Maja", "c1", 1, "Before we start let me share", ts=1000))     # said while paused
+        assert s.view_transcript == []
+        await grow(src, "Maja", "c1", ["Before we start let me share my screen", "Before we start let me share my screen. The order"],
+                   start_seq=2)
+        await src.handle_webhook(partial("Maja", "c1", 4, "Before we start let me share my screen. The order flow.", final=True))
+        assert " ".join(texts(s)) == "my screen. The order flow."
+        await asyncio.sleep(0.35)
+        await grow(src, "Nikola", "c2", ["Sounds", "Sounds good."], ts=2000)                         # after the settle time
+        await src.handle_webhook(partial("Nikola", "c2", 3, "Sounds good to me.", final=True, ts=2000))
+        assert texts(s)[-1] == "Sounds good to me."
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_stop_while_gated_sends_nothing(paused_teams, monkeypatch):
+    monkeypatch.setattr(attendee, "LEAVE_TIMEOUT_S", 0.2)
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await grow(src, "Maja", "c1", ["Just checking", "Just checking the sound"])
+        await s.stop_meeting()
+        await wait_for(lambda: s.status == "finished")
+        assert s.spoken == []
+
+    asyncio.run(run())
+
+
+def test_start_paused_off_listens_from_the_start(teams):
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        assert src.listening and s.snapshot()["bot"]["listening"] is True
+        await src.handle_webhook(state("joined_recording", "s1"))
+        assert src.state == "in_meeting"
+        assert [u for u, _ in teams["http"].calls] == ["/api/v1/bots"]             # no automatic pause
+        await src.handle_webhook(transcript("Maja", "Right away.", 1000, "t1"))
+        await wait_for(lambda: texts(s) == ["Right away."])
+        await src.close()
 
     asyncio.run(run())

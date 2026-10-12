@@ -29,6 +29,17 @@ free to run for yourself, not to resell as a hosted service) and posts webhooks 
    the bot leave and runs the usual end-of-meeting cleanup and saves the run; if the meeting ends or someone removes
    the bot, that happens by itself.
 
+## Starts paused
+
+The bot joins **paused** (`LW_TEAMS_START_PAUSED=1`, the default), so whatever people say while the meeting is still
+loading never reaches the board. The status line says "will start paused" while it joins; once it is in, it shows
+"Paused · not listening" and a **Resume** button. Until Resume, the app drops every transcript it gets (captions and
+finished utterances alike; joins still show in the legend), and the bot is also paused in Attendee as soon as
+Attendee allows it (once it is recording; if Attendee refuses, the next state change tries again). Resume resumes
+Attendee if it was paused and starts listening. A caption already running at that moment sends only the words said
+after Resume. After that, Pause and Resume work as usual. `LW_TEAMS_START_PAUSED=0` makes the bot listen as soon as
+it is in the meeting.
+
 ## Speakers and transcription
 
 Speakers keep their Teams names and colours and are added to the legend as they join or speak. The Teams web client

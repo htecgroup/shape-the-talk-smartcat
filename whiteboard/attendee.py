@@ -21,6 +21,18 @@ transcript.update of a caption seen on the partial stream (same speaker_uuid and
 finishes it if its final partial was lost; without partials (unpatched Attendee, openai transcription) each
 transcript.update is one utterance, as before.
 
+The bot joins paused (LW_TEAMS_START_PAUSED=1, the default), so nothing said while the meeting is still loading
+reaches the screen or the agents. Two layers: a local gate drops every transcript.partial and transcript.update
+until the user presses Resume (the guarantee), and the bot is paused in Attendee too as soon as Attendee allows it
+(first joined_recording; a refusal is retried on the next state change), so the UI shows it paused with a Resume
+button. Resume opens the gate (and calls resume_recording only if Attendee is paused). A caption already running
+at that moment must not leak its earlier words: its words before the resume become a skipped baseline, like sent
+words, so only what is said after it goes out. With the local gate alone the baseline is exactly the caption's text
+when the gate opens (its partials keep arriving, gated). When Attendee was paused it drops captions, so a caption
+that spans the resume first shows up after it with its earlier words; the first partial of a caption that appears
+within RESUME_SETTLE_S of the resume is therefore taken as that baseline (a word or two said in that second can be
+lost). After the first resume, Pause and Resume only drive Attendee, as before.
+
 Retried webhooks are deduplicated on `idempotency_key`. Transcripts go to the pipeline as soon as they arrive:
 Teams captions come in spoken order (measured ~0.15 s after Teams finalizes them), so holding them back for
 reordering would only add delay.
@@ -63,6 +75,8 @@ WEBHOOK_PATH = "/api/attendee/webhook"
 TRIGGERS = ["transcript.update", "transcript.partial", "participant_events.join_leave", "bot.state_change"]
 CHUNK_WORDS = int(os.getenv("LW_TEAMS_CHUNK_WORDS", "6"))      # send a running caption every this many stable words
 PAUSE_S = float(os.getenv("LW_TEAMS_PAUSE_S", "0.8"))          # ... or after this long without a new partial
+START_PAUSED = os.getenv("LW_TEAMS_START_PAUSED", "1").strip() != "0"   # the bot joins paused; Resume starts listening
+RESUME_SETTLE_S = 1.0       # after a resume of a paused Attendee: a caption first seen this soon started before it
 LEAVE_TIMEOUT_S = 6.0       # how long stop() waits for the bot to report that it left
 HTTP_TIMEOUT_S = 20.0
 PARTICIPANT_COLORS = ["#e8590c", "#1971c2", "#2f9e44", "#9c36b5", "#c2255c", "#0c8599", "#f08c00", "#5f3dc4",
@@ -131,6 +145,7 @@ class _Caption:
     line: str | None = None                          # transcript line showing the unsent rest live
     line_text: str = ""
     closed: bool = False
+    gated: bool = False                              # first seen before the gate opened (start paused)
     timer: asyncio.Task | None = None
 
 
@@ -154,6 +169,11 @@ class AttendeeSource:
         self.by_match: dict[tuple, _Caption] = {}    # the same, by (speaker, timestamp_ms) of its transcript.update
         self.legacy: set[tuple] = set()              # transcript.update handled without the stream: ignore its partials
         self.stopping = False
+        self.listening = not START_PAUSED            # the local gate: closed until the first Resume
+        self.auto_pause = START_PAUSED               # pause in Attendee too, once it allows it
+        self.attendee_paused = False                 # Attendee's recording is paused (last we heard)
+        self.resumed_at: float | None = None         # when a resume of a paused Attendee opened the gate
+        self.control = asyncio.Lock()                # pause / resume calls one at a time
         self.client: httpx2.AsyncClient | None = None
 
     # ---------------------------------------------------------------- source API
@@ -194,7 +214,18 @@ class AttendeeSource:
         """Pause or resume listening. A paused bot stays in the meeting, but Attendee drops what it hears."""
         if not self.bot_id or self.state not in ("in_meeting", "paused"):
             return {"ok": False, "error": "The bot is not in the meeting"}
-        verb, action = ("resume", "resume_recording") if on else ("pause", "pause_recording")
+        async with self.control:
+            if on and not self.listening:          # the first Resume of a bot that joined paused
+                return await self._open_gate()
+            verb, action = ("resume", "resume_recording") if on else ("pause", "pause_recording")
+            res = await self._recording(action)
+            if res.get("ok"):
+                await self._set_state(BOT_STATES.get(res["state"], self.state))
+            return {k: v for k, v in res.items() if k != "state"}
+
+    async def _recording(self, action: str) -> dict:
+        """POST pause_recording / resume_recording: {"ok", "state"} or {"ok": False, "error"}."""
+        verb = action.split("_")[0]
         try:
             res = await self._http().post(f"/api/v1/bots/{self.bot_id}/{action}")
             data = res.json()
@@ -203,14 +234,54 @@ class AttendeeSource:
             return {"ok": False, "error": f"Could not {verb} the bot: {exc}"}
         if res.status_code >= 400:
             return {"ok": False, "error": f"Attendee could not {verb} the bot: {data.get('error') or res.text[:200]}"}
-        await self._set_state(BOT_STATES.get(data.get("state", ""), self.state))
+        state = data.get("state", "")
+        self._track(state)
+        return {"ok": True, "state": state}
+
+    async def _open_gate(self) -> dict:
+        """Start listening: resume Attendee if it is paused, then let transcripts through."""
+        state = "in_meeting"
+        if self.attendee_paused:
+            res = await self._recording("resume_recording")
+            if not res["ok"]:
+                return res
+            state = BOT_STATES.get(res["state"], "in_meeting")
+            self.resumed_at = time.monotonic()
+        async with self.order:
+            for cap in self.captions.values():    # running captions: their words so far are never sent
+                if not cap.closed:
+                    self._skip(cap, cap.words)
+            self.listening, self.auto_pause = True, False
+        log.info("bot %s: listening", self.bot_id)
+        await self._set_state(state)
         return {"ok": True}
+
+    async def _pause_in_attendee(self) -> None:
+        """The bot joined paused: pause it in Attendee too, once (a refusal is retried on the next state change)."""
+        async with self.control:
+            if not self.auto_pause or self.listening or self.attendee_paused or self.done.is_set():
+                return
+            res = await self._recording("pause_recording")
+            if not res["ok"]:
+                log.info("auto pause not possible yet: %s", res["error"])
+                return
+            self.auto_pause = False
+            await self._set_state(BOT_STATES.get(res["state"], self.state))
+
+    def _track(self, attendee_state: str) -> None:
+        """Remember whether Attendee's recording is paused."""
+        if attendee_state == "joined_recording_paused":
+            self.attendee_paused = True
+        elif attendee_state.startswith("joined") or attendee_state in FINISHED_STATES:
+            self.attendee_paused = False
 
     def public_state(self) -> dict:
         return {"state": self.state, "error": self.error, "bot_name": self.bot_name, "bot_id": self.bot_id,
-                "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room}
+                "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening}
 
     async def _set_state(self, state: str, error: str | None = None) -> None:
+        if state == "in_meeting" and not self.listening:     # joined paused: shown paused until Resume
+            state = "paused"
         if state == self.state and error == self.error:
             return
         self.state, self.error = state, error
@@ -266,7 +337,11 @@ class AttendeeSource:
             return
         self.bot_id = data.get("id")
         log.info("bot %s created for %s", self.bot_id, self.meeting_url)
-        await self._set_state(BOT_STATES.get(data.get("state", "joining"), "joining"))
+        new = data.get("state", "joining")
+        self._track(new)
+        await self._set_state(BOT_STATES.get(new, "joining"))
+        if new == "joined_recording":
+            await self._pause_in_attendee()
 
     async def _leave(self) -> None:
         try:
@@ -308,7 +383,10 @@ class AttendeeSource:
                 await self._set_state("ended")
             self.done.set()
         elif new in BOT_STATES:
+            self._track(new)
             await self._set_state(BOT_STATES[new])
+            if new == "joined_recording":
+                await self._pause_in_attendee()
 
     async def _on_transcript(self, data: dict) -> None:
         text = ((data.get("transcription") or {}).get("transcript") or "").strip()
@@ -317,6 +395,13 @@ class AttendeeSource:
             return
         match = (data.get("speaker_uuid") or speaker, data.get("timestamp_ms"))
         async with self.order:
+            if not self.listening:          # joined paused: dropped, and so are its late partials
+                cap = self.by_match.get(match)
+                if cap is not None:
+                    cap.closed = True
+                else:
+                    self.legacy.add(match)
+                return
             cap = self.by_match.get(match) or self._same_text(speaker, text)
             if cap is not None:             # seen on the partial stream: done, or this is its final we never got
                 if not cap.closed:
@@ -350,17 +435,31 @@ class AttendeeSource:
             return
         async with self.order:
             cap = self.captions.get(key)
-            if cap is None:
+            new = cap is None
+            if new:
                 match = (data.get("speaker_uuid") or speaker, data.get("timestamp_ms"))
                 if match in self.legacy:            # its transcript.update came first and was used
                     return
-                cap = self.captions[key] = self.by_match[match] = _Caption(key, speaker, match)
-                await self._add_participant(speaker)
+                cap = self.captions[key] = self.by_match[match] = _Caption(key, speaker, match, gated=not self.listening)
+                if self.listening:
+                    await self._add_participant(speaker)
             seq = int(data.get("seq") or 0)
             if cap.closed or seq <= cap.seq:      # late or out of order
                 return
             cap.seq = seq
             words = (data.get("text") or "").split()
+            if not self.listening:                  # joined paused: follow the caption, show and send nothing
+                cap.words, cap.closed = words, bool(data.get("is_final"))
+                return
+            if new and self.resumed_at is not None and time.monotonic() - self.resumed_at < RESUME_SETTLE_S:
+                # Attendee was paused until a moment ago: this caption started before the resume
+                self._skip(cap, words)
+                cap.gated = True
+                if data.get("is_final"):
+                    cap.closed = True
+                return
+            if cap.gated:                           # began before listening: its speaker joins the legend now
+                await self._add_participant(speaker)
             if data.get("is_final"):
                 await self._close_caption(cap, words)
                 return
@@ -403,6 +502,12 @@ class AttendeeSource:
             if uid is not None and fixed and fixed != text:
                 await self.session.emit({"type": "utterance_final", "id": uid, "text": fixed})
 
+    def _skip(self, cap: _Caption, words: list[str]) -> None:
+        """Words of a caption said before listening started: counted as sent (never shown or sent), as a piece without a line."""
+        if words:
+            cap.sent += [_norm(w) for w in words]
+            cap.pieces.append((None, len(words), " ".join(words)))
+
     async def _send_piece(self, cap: _Caption, words: list[str]) -> None:
         """One piece of a running caption becomes an utterance for the agents."""
         s, text = self.session, " ".join(words)
@@ -444,8 +549,9 @@ class AttendeeSource:
             return
         async with self.order:
             for cap in list(self.captions.values()):
-                if not cap.closed:
+                if not cap.closed and self.listening:
                     await self._close_caption(cap, cap.words)
+                cap.closed = True
 
     def _is_bot(self, name: str | None) -> bool:
         name = (name or "").strip().casefold()

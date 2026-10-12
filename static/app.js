@@ -539,9 +539,10 @@
     const name = S.bot.bot_name || "Whiteboard";
     $("botRec").className = `rec rec-${st}`;
     const room = S.bot.breakout_room;
-    $("botStateText").textContent = st === "joining" && room
+    const startsPaused = S.bot.listening === false && ["creating", "joining", "waiting_room"].includes(st);
+    $("botStateText").textContent = (st === "joining" && room
       ? `Joining · moves to “${room}” when it opens`
-      : (BOT_TEXT[st] || st).replace("Whiteboard", name);
+      : (BOT_TEXT[st] || st).replace("Whiteboard", name)) + (startsPaused ? " · will start paused" : "");
     $("botHintName").textContent = name;
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
