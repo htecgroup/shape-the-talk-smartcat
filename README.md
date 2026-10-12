@@ -35,15 +35,8 @@ goes through the queue first"*, the board redraws itself.
 The key idea: **the AI never draws.** It edits a structured board through typed operations, and a deterministic
 renderer draws it. That keeps the board stable, attributable and undoable.
 
-```
- speech ──► transcription ──► Extractor ──► Board Modeller ──► Board state ──► hand-drawn renderer
- (mic / Teams)                 what kind of     which ops:          validated,      (SVG + rough.js,
-                               statement is     add, connect,       versioned,      live over WebSocket)
-                               this?            correct, undo…      undo per line
-                                                                       ▲
-                                                 Consolidator ─────────┤  cleans up and plans the layout
-                                                 Analyst ──────────────┘  open questions, disagreements
-```
+<p align="center"><img src="docs/pipeline.png" alt="Pipeline: meeting, transcription, extractor, board modeller, board state, renderer; consolidator and analyst also edit the board state"><br>
+<sub><i>Drawn by Claude with our own <code>shapethetalk</code> plugin.</i></sub></p>
 
 Each statement becomes a set of ops tagged with who said it, so attribution can't be wrong and "undo" reverts exactly
 one statement. Full details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
