@@ -1,13 +1,14 @@
 """Meeting session: state, broadcasting, controls, replay.
 
-Utterances come from a pluggable source (whiteboard/sources.py): the scripted mock
-meeting ("live" mode) or the browser microphone ("mic" mode). Both feed the same
+Utterances come from a pluggable source: the scripted mock meeting ("live" mode) or the
+browser microphone ("mic" mode) in whiteboard/sources.py, or an Attendee bot in a Teams
+meeting ("teams" mode, whiteboard/attendee.py). All feed the same
 agent pipeline (whiteboard/pipeline.py) through `submit_utterance()`.
 
 One global session drives the demo. Every event that reaches the browser goes
 through `emit()`, which (a) folds it into a snapshot for late-joining clients,
 (b) appends it to the run timeline, and (c) pushes it to all WebSockets.
-Live and mic runs are saved to runs/ (whiteboard/recording.py); replay just
+Live, mic and teams runs are saved to runs/ (whiteboard/recording.py); replay just
 re-emits a recorded timeline, so it makes no API calls.
 """
 
@@ -23,6 +24,8 @@ from typing import Any
 
 from . import agents, export
 from .approvals import DEFAULT_APPROVAL_MODE, ApprovalGate
+from . import attendee
+from .attendee import AttendeeSource
 from .board import BoardState
 from .pipeline import AgentPipeline
 from .recording import list_runs, resolve_run, save_run
@@ -83,7 +86,7 @@ class Session(AgentPipeline, ApprovalGate):
 
     # ------------------------------------------------------------------ state
     def _reset_state(self) -> None:
-        self.mode = "idle"          # idle | live (scripted meeting) | mic (talk live) | replay
+        self.mode = "idle"          # idle | live (scripted meeting) | mic (talk live) | teams (Attendee bot) | replay
         self.status = "idle"        # idle | running | paused | finished
         self.clock = Clock()
         self.board = BoardState()
@@ -112,7 +115,7 @@ class Session(AgentPipeline, ApprovalGate):
         self.t0 = time.perf_counter()
         self.run_file: str | None = None
         self.replay_name: str | None = None
-        self.source: ScriptedSource | MicSource | None = None
+        self.source: ScriptedSource | MicSource | AttendeeSource | None = None
         self.utt_timing: dict[str, dict] = {}   # mic mode: speech end / final / board times per utterance
 
     def snapshot(self) -> dict:
@@ -122,8 +125,10 @@ class Session(AgentPipeline, ApprovalGate):
             "activity": self.view_activity[-150:], "board": self.view_board,
             "questions": self.questions, "disagreements": self.disagreements, "summary": self.summary,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
-            "mic": self.source.public_state() if self.source else None,
+            "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
+            "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
+                   else {"state": "idle", "error": attendee.config_error()},
         }
 
     def spec_inputs(self) -> tuple[list[dict], list[dict]]:
@@ -136,14 +141,15 @@ class Session(AgentPipeline, ApprovalGate):
     def _meeting_public(self) -> dict:
         m = self.meeting
         return {"id": m.get("id"), "title": m["title"], "topic": m.get("topic"), "source": m.get("source", "scripted"),
-                "participants": m["participants"], "total": len(m.get("utterances", []))}
+                # a copy, so a recorded event keeps the people of its moment (Teams adds them as they join)
+                "participants": [dict(p) for p in m["participants"]], "total": len(m.get("utterances", []))}
 
     # -------------------------------------------------------------- broadcast
     async def emit(self, event: dict, record: bool = True) -> None:
         if "t" not in event:
             event["t"] = round(time.perf_counter() - self.t0, 3)
         self._reduce(event)
-        if record and self.mode in ("live", "mic"):
+        if record and self.mode in ("live", "mic", "teams"):
             self.timeline.append(event)
         await self._send_all(event)
 
@@ -198,11 +204,18 @@ class Session(AgentPipeline, ApprovalGate):
 
     # --------------------------------------------------------------- controls
     async def start(self, mode: str = "live", run: str | None = None, speed: float | None = None,
-                    speaker: str | None = None, topic: str | None = None) -> dict:
+                    speaker: str | None = None, topic: str | None = None, meeting_url: str | None = None,
+                    breakout_room: str | None = None) -> dict:
         if self.status in ("running", "paused"):
             return {"ok": False, "error": "already running; reset first"}
+        if mode == "teams":
+            meeting_url = (meeting_url or "").strip()
+            if not meeting_url.startswith(("http://", "https://")):
+                return {"ok": False, "error": "Paste the Teams meeting link (https://teams.microsoft.com/...)"}
+            if err := attendee.config_error():
+                return {"ok": False, "error": err}
         await self.reset(broadcast=False)
-        if speed and mode != "mic":
+        if speed and mode not in ("mic", "teams"):
             self.clock.speed = float(speed)
         if mode == "replay":
             path = resolve_run(run or "latest")
@@ -220,6 +233,11 @@ class Session(AgentPipeline, ApprovalGate):
                 self.source = MicSource(self.meeting["participants"][0]["name"], topic)
                 self.source.session = self      # the browser can connect before run() starts
                 self.mode = "mic"
+            elif mode == "teams":
+                self.meeting = attendee.teams_meeting(topic)
+                self.source = AttendeeSource(meeting_url, topic, breakout_room)
+                self.source.session = self
+                self.mode = "teams"
             else:
                 self.meeting = load_meeting()
                 self.source = ScriptedSource(self.meeting)
@@ -253,8 +271,13 @@ class Session(AgentPipeline, ApprovalGate):
         time after the meeting ended (talk live continued, an approval decided later)."""
         self.t0 = time.perf_counter() - (self.timeline[-1]["t"] if self.timeline else 0.0)
 
+    async def stop_meeting(self) -> None:
+        """Teams: the bot leaves, then the meeting ends like a talk-live Stop (final cleanup, run saved)."""
+        if self.mode == "teams" and self.status == "running" and isinstance(self.source, AttendeeSource):
+            self._tasks.append(asyncio.create_task(self.source.stop()))   # takes a few seconds; don't block the socket
+
     async def pause(self) -> None:
-        if self.status == "running" and self.mode != "mic":   # you cannot pause someone talking
+        if self.status == "running" and self.mode not in ("mic", "teams"):   # you cannot pause someone talking
             self.clock.pause()
             self.status = "paused"
             await self.emit_status()
@@ -264,6 +287,11 @@ class Session(AgentPipeline, ApprovalGate):
             self.clock.resume()
             self.status = "running"
             await self.emit_status()
+
+    async def set_listening(self, on: bool) -> dict:
+        if self.status != "running" or not isinstance(self.source, AttendeeSource):
+            return {"ok": False, "error": "Pausing the bot only works during a Teams meeting"}
+        return await self.source.set_listening(on)
 
     async def set_speed(self, speed: float) -> None:
         self.clock.speed = max(0.25, min(float(speed), 16.0))
@@ -276,7 +304,7 @@ class Session(AgentPipeline, ApprovalGate):
             task.cancel()
         for _, task in self.pending:
             task.cancel()
-        if self.mode in ("live", "mic") and self.status != "finished" and self.spoken:
+        if self.mode in ("live", "mic", "teams") and self.status != "finished" and self.spoken:
             self._save_run(complete=False)
         self._tasks = []
         self._reset_state()

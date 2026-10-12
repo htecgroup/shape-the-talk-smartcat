@@ -1,0 +1,392 @@
+diff --git a/bots/bot_controller/bot_controller.py b/bots/bot_controller/bot_controller.py
+index 3bebf26..4f5930d 100644
+--- a/bots/bot_controller/bot_controller.py
++++ b/bots/bot_controller/bot_controller.py
+@@ -73,6 +73,7 @@ from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
+ from .closed_caption_manager import ClosedCaptionManager
+ from .grouped_closed_caption_manager import GroupedClosedCaptionManager
+ from .gstreamer_pipeline import GstreamerPipeline
++from .partial_caption_webhook_sender import PartialCaptionWebhookSender
+ from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
+ from .per_participant_streaming_audio_input_manager import PerParticipantStreamingAudioInputManager
+ from .pipeline_configuration import PipelineConfiguration
+@@ -294,6 +295,7 @@ class BotController:
+             video_frame_size=self.bot_in_db.recording_dimensions(),
+             teams_bot_login_is_available=self.teams_bot_login_is_available(),
+             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
++            teams_breakout_room=self.bot_in_db.teams_breakout_room(),
+             # Guarantees db query is run on main thread, so no extra sql connection is added
+             fetch_teams_bot_login_credentials_callback=self.main_thread_executor.wraps(
+                 self.retrieve_teams_bot_login_credentials,
+@@ -933,9 +935,11 @@ class BotController:
+                 get_participant_callback=self.get_participant,
+             )
+         else:
++            self.partial_caption_webhook_sender = PartialCaptionWebhookSender(self.bot_in_db)
+             self.closed_caption_manager = ClosedCaptionManager(
+                 save_utterance_callback=self.save_closed_caption_utterance,
+                 get_participant_callback=self.get_participant,
++                partial_caption_callback=self.partial_caption_webhook_sender.caption_updated if self.partial_caption_webhook_sender.enabled() else None,
+             )
+ 
+         self.rtmp_client = None
+diff --git a/bots/bot_controller/closed_caption_manager.py b/bots/bot_controller/closed_caption_manager.py
+index e165faa..1a77493 100644
+--- a/bots/bot_controller/closed_caption_manager.py
++++ b/bots/bot_controller/closed_caption_manager.py
+@@ -39,10 +39,12 @@ class CaptionEntry:
+ 
+ 
+ class ClosedCaptionManager:
+-    def __init__(self, *, save_utterance_callback, get_participant_callback):
++    def __init__(self, *, save_utterance_callback, get_participant_callback, partial_caption_callback=None):
+         self.captions: Dict[str, CaptionEntry] = {}
+         self.save_utterance_callback = save_utterance_callback
+         self.get_participant_callback = get_participant_callback
++        # Optional: called with every caption update (partial or final), e.g. for the transcript.partial webhook
++        self.partial_caption_callback = partial_caption_callback
+         self.last_participant_not_found_logged_at = datetime.min
+ 
+     def upsert_caption(self, caption_data: dict):
+@@ -58,6 +60,15 @@ class ClosedCaptionManager:
+         else:
+             self.captions[key] = CaptionEntry(caption_data)
+ 
++        if self.partial_caption_callback:
++            entry = self.captions[key]
++            self.partial_caption_callback(
++                caption_data=caption_data,
++                participant=self.get_participant_callback(device_id),
++                # Same value as the timestamp_ms of the utterance saved for this caption, so the two can be matched
++                timestamp_ms=int(entry.created_at.timestamp() * 1000),
++            )
++
+     def flush_captions(self):
+         self.process_captions(should_flush=True)
+ 
+diff --git a/bots/models.py b/bots/models.py
+index 4cba85a..cb8444b 100644
+--- a/bots/models.py
++++ b/bots/models.py
+@@ -1071,6 +1071,9 @@ class Bot(models.Model):
+     def teams_login_group_name(self):
+         return self.settings.get("teams_settings", {}).get("login_group_name")
+ 
++    def teams_breakout_room(self):
++        return self.settings.get("teams_settings", {}).get("breakout_room")
++
+     def use_zoom_web_adapter(self):
+         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
+ 
+@@ -3206,6 +3209,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
+     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
+     BOT_LOGS_UPDATE = 9, "Bot Logs Update"
+     PARTICIPANT_EVENTS_SPEECH_START_STOP = 10, "Participant Speech Start/Stop"
++    TRANSCRIPT_PARTIAL = 11, "Transcript Partial"
+     # add other event types here
+ 
+     @classmethod
+@@ -3222,6 +3226,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
+             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
+             cls.BOT_LOGS_UPDATE: "bot_logs.update",
+             cls.PARTICIPANT_EVENTS_SPEECH_START_STOP: "participant_events.speech_start_stop",
++            cls.TRANSCRIPT_PARTIAL: "transcript.partial",
+         }
+ 
+     @classmethod
+diff --git a/bots/serializers.py b/bots/serializers.py
+index ec4b23c..6f548c9 100644
+--- a/bots/serializers.py
++++ b/bots/serializers.py
+@@ -786,6 +786,11 @@ TEAMS_SETTINGS_SCHEMA = {
+             "description": "Optional bot login group name to use for Teams signed-in bot selection. If no group is specified, the oldest Teams group will be selected.",
+             "default": None,
+         },
++        "breakout_room": {
++            "type": ["string", "null"],
++            "description": "Optional breakout room name, e.g. 'Room 4' (a number like '4' means 'Room 4'). The bot joins the main meeting, waits until this room is open, then joins the room instead. It leaves when the room closes.",
++            "default": None,
++        },
+     },
+     "required": [],
+     "additionalProperties": False,
+diff --git a/bots/teams_bot_adapter/teams_bot_adapter.py b/bots/teams_bot_adapter/teams_bot_adapter.py
+index b1c3b09..3e6ef1d 100644
+--- a/bots/teams_bot_adapter/teams_bot_adapter.py
++++ b/bots/teams_bot_adapter/teams_bot_adapter.py
+@@ -57,6 +57,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
+         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
+         modify_dom_for_video_recording: bool,
+         teams_bot_identification_credentials: dict | None,
++        teams_breakout_room: str | None = None,
+         **kwargs,
+     ):
+         super().__init__(*args, **kwargs)
+@@ -67,6 +68,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
+         self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
+         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+         self.teams_bot_identification_credentials = teams_bot_identification_credentials
++        # Breakout room to join instead of the main meeting. Its join link is found once the bot is in the main meeting.
++        self.teams_breakout_room = (teams_breakout_room or "").strip() or None
++        self.breakout_room_url = None
+         self.should_log_network_requests = False
+         self.had_disable_light_experience_redirect = False
+ 
+@@ -168,6 +172,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
+             window.teamsInitialData = {{
+                 shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
+                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
++                inBreakoutRoom: {"true" if self.breakout_room_url else "false"},
+                 teamsClosedCaptionsLanguageEnforcementDurationSeconds: {json.dumps(self.teams_closed_captions_language_enforcement_duration_seconds)},
+                 perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())}
+             }}
+diff --git a/bots/teams_bot_adapter/teams_chromedriver_payload.js b/bots/teams_bot_adapter/teams_chromedriver_payload.js
+index dd230d2..42abcc3 100644
+--- a/bots/teams_bot_adapter/teams_chromedriver_payload.js
++++ b/bots/teams_bot_adapter/teams_chromedriver_payload.js
+@@ -2252,6 +2252,13 @@ const wsInterceptor = new WebSocketInterceptor({
+             if (eventDataObject.url.endsWith("conversation/conversationEnd/")) {
+                 handleConversationEnd(eventDataObject);
+             }
++            // When the breakout room closes, Teams ends the room's call (and would move us back to the main meeting), so leave.
++            if (window.teamsInitialData?.inBreakoutRoom && eventDataObject.url.endsWith("call/end/")) {
++                window.ws?.sendJson({
++                    type: 'MeetingStatusChange',
++                    change: 'meeting_ended'
++                });
++            }
+             /*
+             Not sure if this is needed
+             if (eventDataObject.url.endsWith("controlVideoStreaming/")) {
+diff --git a/bots/teams_bot_adapter/teams_ui_methods.py b/bots/teams_bot_adapter/teams_ui_methods.py
+index bfd8853..1095171 100644
+--- a/bots/teams_bot_adapter/teams_ui_methods.py
++++ b/bots/teams_bot_adapter/teams_ui_methods.py
+@@ -9,12 +9,26 @@ from selenium.webdriver.common.by import By
+ from selenium.webdriver.support import expected_conditions as EC
+ from selenium.webdriver.support.ui import WebDriverWait
+ 
++from bots.meeting_url_utils import normalize_meeting_url
+ from bots.models import RecordingViews
+ from bots.utils import cyrillicize_keywords_in_string, truncate_string_with_ellipsis
+-from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
++from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Finds a breakout room by name in the main meeting. A plain number like "4" also matches "Room 4".
++FIND_BREAKOUT_ROOM_SCRIPT = """
++const wanted = arguments[0].trim().toLowerCase();
++const names = /^\\d+$/.test(wanted) ? [wanted, 'room ' + wanted] : [wanted];
++let call = window.callingDebug?.observableCall;
++if (!call?.breakoutDetails) {
++    try { call = window.msteamscalling?.deref?.()?.callingService?.getActiveCall?.(); } catch (e) {}
++}
++const rooms = call?.breakoutDetails?.mainMeetingProperties?.allBreakoutRooms ?? [];
++const room = rooms.find(r => names.includes((r.name || '').trim().toLowerCase()));
++return { roomNames: rooms.map(r => r.name), isOpen: !!room?.isOpen, url: room?.meetingJoinUrl ?? null };
++"""
++
+ 
+ class UiTeamsBlockingUsException(UiRetryableExpectedException):
+     def __init__(self, message, step=None, inner_exception=None):
+@@ -556,12 +570,17 @@ class TeamsUIMethods:
+         self.install_join_shield_bypass()
+         self.click_element(join_button, "join_button")
+ 
+-        # Start polling participants
+-        self.start_participants_poller()
++        # Start polling participants. When going to a breakout room, wait until the bot is in the room,
++        # because the first meeting id seen is the one participants are tracked for.
++        if not self.waiting_for_breakout_room():
++            self.start_participants_poller()
+ 
+         # Wait for meeting to load and enable captions
+         self.click_show_more_button()
+ 
++        if self.waiting_for_breakout_room():
++            self.wait_for_breakout_room_to_open()
++
+         # Click the captions button
+         self.click_captions_button()
+ 
+@@ -573,6 +592,30 @@ class TeamsUIMethods:
+ 
+         self.ready_to_show_bot_image()
+ 
++    def waiting_for_breakout_room(self):
++        return bool(getattr(self, "teams_breakout_room", None)) and not self.breakout_room_url
++
++    def wait_for_breakout_room_to_open(self):
++        # The bot is in the main meeting. Once the room is open, join again with the room's own join link.
++        logger.info(f"Waiting for breakout room {self.teams_breakout_room!r} to open")
++        last_room_names = None
++        while not self.left_meeting and not self.cleaned_up:
++            room = self.driver.execute_script(FIND_BREAKOUT_ROOM_SCRIPT, self.teams_breakout_room) or {}
++            if room.get("roomNames") != last_room_names:
++                last_room_names = room.get("roomNames")
++                logger.info(f"Breakout rooms in the meeting: {last_room_names}")
++
++            if room.get("isOpen") and room.get("url"):
++                _, normalized_url = normalize_meeting_url(room["url"])
++                self.breakout_room_url = normalized_url or room["url"]
++                self.meeting_url = self.breakout_room_url
++                logger.info(f"Breakout room {self.teams_breakout_room!r} is open, joining it at {self.meeting_url}")
++                raise UiInfinitelyRetryableException("Joining the breakout room with its own join link", "wait_for_breakout_room_to_open")
++
++            time.sleep(2)
++
++        raise UiInfinitelyRetryableException("Left the meeting while waiting for the breakout room", "wait_for_breakout_room_to_open")
++
+     def start_participants_poller(self):
+         self.driver.execute_script("window.participantsPoller.start()")
+ 
+diff --git a/bots/bot_controller/partial_caption_webhook_sender.py b/bots/bot_controller/partial_caption_webhook_sender.py
+new file mode 100644
+index 0000000..03434ca
+--- /dev/null
++++ b/bots/bot_controller/partial_caption_webhook_sender.py
+@@ -0,0 +1,119 @@
++import logging
++import os
++import threading
++import time
++import uuid
++from collections import OrderedDict
++
++import requests
++from django.conf import settings
++
++from bots.models import WebhookTriggerTypes
++from bots.webhook_utils import sign_payload, url_is_public
++
++logger = logging.getLogger(__name__)
++
++PARTIAL_WEBHOOK_REQUEST_TIMEOUT = float(os.getenv("PARTIAL_CAPTION_WEBHOOK_REQUEST_TIMEOUT", 5))
++
++
++class PartialCaptionWebhookSender:
++    """
++    Sends every change of a running closed caption (partial and final) to the bot's transcript.partial
++    webhook subscribers, straight from the bot process.
++
++    Unlike other webhooks these are not stored as WebhookDeliveryAttempt rows and are not retried: they
++    arrive several times a second, are only useful right away, and the finished caption still arrives
++    as transcript.update. One background thread posts them in order; while a post is in flight, newer
++    updates of the same caption replace the queued one, so a slow receiver gets the latest text, not a backlog.
++    """
++
++    def __init__(self, bot):
++        # Runs on the main thread: all database reads happen here.
++        trigger = WebhookTriggerTypes.TRANSCRIPT_PARTIAL
++        if bot.bot_webhook_subscriptions.exists():
++            subscriptions = bot.bot_webhook_subscriptions.filter(triggers__contains=[trigger], is_active=True)
++        else:
++            subscriptions = bot.project.webhook_subscriptions.filter(bot__isnull=True, triggers__contains=[trigger], is_active=True)
++        self.urls = [s.url for s in subscriptions if not settings.REQUIRE_PUBLIC_WEBHOOK_URLS or url_is_public(s.url)]
++        self.secret = None
++        if self.urls:
++            active_secret = bot.project.webhook_secrets.order_by("-created_at").first()
++            self.secret = active_secret.get_secret() if active_secret else None
++        self.bot_id = bot.object_id
++        self.bot_metadata = bot.metadata
++        self.pending = OrderedDict()  # caption key -> latest payload not yet sent
++        self.last_sent = {}  # caption key -> (text, is_final) last queued, to skip repeats
++        self.seq = {}
++        self.cond = threading.Condition()
++        self.thread = None
++        self.last_error_logged_at = 0.0
++
++    def enabled(self):
++        return bool(self.urls and self.secret)
++
++    def caption_updated(self, *, caption_data, participant, timestamp_ms):
++        """Called for every caption update. timestamp_ms matches the transcript.update of the finished caption."""
++        if not self.enabled() or not participant:
++            return
++        key = f"{caption_data['deviceId']}:{caption_data['captionId']}"
++        text = caption_data.get("text", "")
++        is_final = bool(caption_data.get("isFinal"))
++        if self.last_sent.get(key) == (text, is_final):
++            return
++        self.last_sent[key] = (text, is_final)
++        self.seq[key] = self.seq.get(key, 0) + 1
++        data = {
++            "caption_id": key,
++            "seq": self.seq[key],
++            "speaker_name": participant.get("participant_full_name"),
++            "speaker_uuid": participant.get("participant_uuid"),
++            "speaker_user_uuid": participant.get("participant_user_uuid"),
++            "speaker_is_host": participant.get("participant_is_host", False),
++            "timestamp_ms": timestamp_ms,
++            "text": text,
++            "is_final": is_final,
++        }
++        with self.cond:
++            self.pending[key] = data
++            self.pending.move_to_end(key)
++            if self.thread is None:
++                self.thread = threading.Thread(target=self._run, name="partial-caption-webhooks", daemon=True)
++                self.thread.start()
++            self.cond.notify()
++
++    def _run(self):
++        while True:
++            with self.cond:
++                while not self.pending:
++                    self.cond.wait()
++                _, data = self.pending.popitem(last=False)
++            self._post(data)
++
++    def _post(self, data):
++        payload = {
++            "idempotency_key": str(uuid.uuid4()),
++            "bot_id": self.bot_id,
++            "bot_metadata": self.bot_metadata,
++            "trigger": WebhookTriggerTypes.trigger_type_to_api_code(WebhookTriggerTypes.TRANSCRIPT_PARTIAL),
++            "data": data,
++        }
++        headers = {"Content-Type": "application/json", "User-Agent": "Attendee-Webhook/1.0", "X-Webhook-Signature": sign_payload(payload, self.secret)}
++        for url in self.urls:
++            try:
++                response = requests.post(
++                    url,
++                    json=payload,
++                    headers=headers,
++                    timeout=PARTIAL_WEBHOOK_REQUEST_TIMEOUT,
++                    verify=os.getenv("DELIVER_WEBHOOK_VERIFY_SSL", "true").lower() != "false",
++                    allow_redirects=False,
++                )
++                if not 200 <= response.status_code < 300:
++                    self._log_error(f"partial caption webhook to {url} returned {response.status_code}")
++            except requests.RequestException as e:
++                self._log_error(f"partial caption webhook to {url} failed: {e}")
++
++    def _log_error(self, message):
++        if time.time() - self.last_error_logged_at > 60:
++            logger.warning(message)
++            self.last_error_logged_at = time.time()
+diff --git a/bots/migrations/0095_alter_webhookdeliveryattempt_webhook_trigger_type.py b/bots/migrations/0095_alter_webhookdeliveryattempt_webhook_trigger_type.py
+new file mode 100644
+index 0000000..ca468a0
+--- /dev/null
++++ b/bots/migrations/0095_alter_webhookdeliveryattempt_webhook_trigger_type.py
+@@ -0,0 +1,18 @@
++# Generated by Django 5.2.17 on 2026-10-11 16:44
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('bots', '0094_remove_botevent_valid_event_type_event_sub_type_combinations_and_more'),
++    ]
++
++    operations = [
++        migrations.AlterField(
++            model_name='webhookdeliveryattempt',
++            name='webhook_trigger_type',
++            field=models.IntegerField(choices=[(1, 'Bot State Change'), (2, 'Transcript Update'), (3, 'Chat Messages Update'), (4, 'Participant Join/Leave'), (5, 'Calendar Events Update'), (6, 'Calendar State Change'), (7, 'Async Transcription State Change'), (8, 'Zoom OAuth Connection State Change'), (9, 'Bot Logs Update'), (10, 'Participant Speech Start/Stop'), (11, 'Transcript Partial')], default=1),
++        ),
++    ]

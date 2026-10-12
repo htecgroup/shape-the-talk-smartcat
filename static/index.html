@@ -18,6 +18,7 @@
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
     <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 5 2.2M18.5 11a6.5 6.5 0 0 1-.9 3.3M5.5 11a6.5 6.5 0 0 0 10.4 5.2M12 17.5V21M3 3l18 18"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M15.5 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/></symbol>
     <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5"/><path d="M3.5 3.5v5h5"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5"/><path d="M20.5 3.5v5h-5"/></symbol>
     <symbol id="i-message" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></symbol>
@@ -50,6 +51,7 @@
       <div class="seg" id="modeSeg" role="group" aria-label="Mode">
         <button data-mode="live" class="on" title="Replay the scripted 4-person meeting through the AI pipeline">Simulated (AI)</button>
         <button data-mode="mic" title="Talk into your microphone; the board builds from what you say"><svg class="i"><use href="#i-mic"/></svg>Talk live</button>
+        <button data-mode="teams" title="A bot joins a Microsoft Teams meeting and the board builds from what everyone says"><svg class="i"><use href="#i-users"/></svg>Teams meeting</button>
         <button data-mode="replay">Replay</button>
       </div>
       <select id="runSelect" class="run-select" title="Recorded run to replay" hidden></select>
@@ -91,6 +93,19 @@
         </div>
         <div class="mic-err" id="micErr" hidden></div>
         <div class="mic-hint" id="micHint">Speak in English, in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>
+      </div>
+      <div class="micbox" id="teamsBox" hidden>
+        <div class="mic-fields" id="teamsFields">
+          <label>Teams meeting link<input id="teamsUrl" placeholder="https://teams.microsoft.com/l/meetup-join/…" autocomplete="off" spellcheck="false"></label>
+          <label>Breakout room <span class="opt">optional</span><input id="teamsRoom" maxlength="100" placeholder="e.g. Room 4 (the bot moves there when it opens)" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="mic-row">
+          <span class="rec" id="botRec"><span class="dot"></span><span id="botStateText">Bot not started</span></span>
+          <button id="btnTeamsPause" class="btn ghost tiny" title="Pause the bot's listening: it stays in the meeting but ignores what is said" hidden>❚❚ Pause</button>
+          <button id="btnTeamsJoin" class="btn primary tiny">👥 Join meeting</button>
+        </div>
+        <div class="mic-err" id="botErr" hidden></div>
+        <div class="mic-hint" id="botHint">A bot named “Whiteboard” joins the meeting. If it waits in the lobby, admit it. Speakers show up with their Teams names. With a breakout room, the bot moves there when the room opens; someone in the room admits it.</div>
       </div>
       <div class="participants" id="participants"></div>
       <div class="panel-head small"><h3>Live transcript</h3><span class="sub" id="transcriptSub">simulated · no audio</span></div>

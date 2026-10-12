@@ -12,13 +12,14 @@ import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).parent / ".env")
 
 from whiteboard import agents, export  # noqa: E402
+from whiteboard.attendee import AttendeeSource, verify_signature  # noqa: E402
 from whiteboard.recording import list_runs  # noqa: E402
 from whiteboard.session import Session  # noqa: E402
 from whiteboard.sources import MicSource  # noqa: E402
@@ -113,11 +114,17 @@ async def handle_command(msg: dict) -> dict:
     if cmd == "start":
         if msg.get("mode") == "mic":
             return {"ok": False, "error": "talk-live sessions start over /ws/mic (they need an audio stream)"}
-        return await s.start(msg.get("mode", "live"), msg.get("run"), msg.get("speed"))
-    if cmd == "pause":
+        return await s.start(msg.get("mode", "live"), msg.get("run"), msg.get("speed"),
+                             topic=msg.get("topic"), meeting_url=msg.get("meeting_url"),
+                             breakout_room=msg.get("breakout_room"))
+    if cmd == "stop":
+        await s.stop_meeting()
+    elif cmd == "pause":
         await s.pause()
     elif cmd == "resume":
         await s.resume()
+    elif cmd == "listen":
+        return await s.set_listening(bool(msg.get("on")))
     elif cmd == "speed":
         await s.set_speed(float(msg.get("speed", 1)))
     elif cmd == "reset":
@@ -129,6 +136,21 @@ async def handle_command(msg: dict) -> dict:
     else:
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
     return {"ok": True}
+
+
+@app.post("/api/attendee/webhook")
+async def attendee_webhook(request: Request) -> Response:
+    """Attendee bot webhooks (transcript, participants, bot state). Signed; answered fast (Attendee times out at 10 s)."""
+    try:
+        payload = json.loads(await request.body())
+    except ValueError:
+        return Response("bad json", status_code=400)
+    if not isinstance(payload, dict) or not verify_signature(payload, request.headers.get("X-Webhook-Signature")):
+        return Response("Invalid signature", status_code=400)
+    src = get_session().source
+    if isinstance(src, AttendeeSource):
+        await src.handle_webhook(payload)       # events of another bot are ignored there
+    return Response("ok", status_code=200)
 
 
 @app.post("/api/control")

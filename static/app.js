@@ -12,13 +12,14 @@
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
-    source: "scripted",                       // what the current meeting is: scripted | mic
+    source: "scripted",                       // what the current meeting is: scripted | mic | teams
     meetingTitle: "",  // the server's title, used in export filenames
     mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
     approvalMode: "auto", approvals: [],      // auto: agents edit freely | ask: removals wait for an OK
     serverMode: "idle",                       // the session's mode as the server reports it (S.mode is the toggle)
     deciding: new Set(), approvalsSig: null,  // proposals clicked, waiting to leave the list; last rendered panel
     summary: null, summaryWriting: false,     // {title, markdown, filename}, written when the meeting ends
+    bot: { state: "idle", error: null },     // the Teams meeting bot
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
                   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
@@ -49,6 +50,7 @@
       case "utterance_interim": return onUttInterim(ev.id, ev.text);
       case "utterance_drop": return onUttDrop(ev.id);
       case "mic_state": return onMicState(ev);
+      case "bot_state": return onBotState(ev);
       case "extraction": return onExtraction(ev);
       case "activity": return addActivity(ev.item, true);
       case "board": return onBoard(ev);
@@ -88,6 +90,7 @@
     onBoard({ board: s.board, silent: true });
     setApprovalMode(s.approval_mode);
     S.deciding.clear(); S.approvalsSig = null; setServerMode(s.mode);
+    S.bot = s.bot || { state: "idle", error: null };
     if (s.mic) S.mic = s.mic; else if (s.mode !== "mic") S.mic = { state: "idle" };
     setStatus(s.status, s.mode, s.speed);
     renderApprovals(s.approvals || []);
@@ -105,7 +108,8 @@
     if (!m) return;
     S.meetingTitle = m.title;
     S.source = m.source || "scripted";
-    $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime" : "simulated · no audio";
+    $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime"
+      : S.source === "teams" ? "Teams meeting · Attendee bot" : "simulated · no audio";
     S.total = m.total || 0;
     S.participants = m.participants;
     for (const p of m.participants) S.colors[p.name] = p.color;
@@ -392,7 +396,7 @@
     document.querySelectorAll("#approvalSeg button").forEach((b) => b.classList.toggle("on", b.dataset.approval === S.approvalMode));
   }
 
-  // a replay shows proposals read-only; a live or talk-live session (also after it ended) can decide them
+  // a replay shows proposals read-only; a live, talk-live or Teams session (also after it ended) can decide them
   function setServerMode(mode) {
     if (!mode || mode === S.serverMode) return;
     S.serverMode = mode;
@@ -403,7 +407,7 @@
     S.approvals = pending;
     const ids = new Set(pending.map((p) => p.id));
     for (const id of S.deciding) if (!ids.has(id)) S.deciding.delete(id);   // decided: it left the list
-    const canDecide = S.serverMode === "live" || S.serverMode === "mic";
+    const canDecide = ["live", "mic", "teams"].includes(S.serverMode);
     const boardOf = (id) => (S.board && S.board.boards.find((b) => b.id === id)) || null;
     const tabTitle = (id) => (boardOf(id) || {}).title || id;
     const targets = (p) => p.targets || [p.target];
@@ -465,7 +469,8 @@
     let txt = "Idle";
     if (status === "running") {
       pill.classList.add(S.mode === "replay" ? "replay" : "live");
-      txt = S.mode === "replay" ? "Replay" : S.mode === "mic" ? (S.mic.state === "listening" ? "Talk live · REC" : "Talk live") : "Live · AI";
+      txt = S.mode === "replay" ? "Replay" : S.mode === "mic" ? (S.mic.state === "listening" ? "Talk live · REC" : "Talk live")
+        : S.mode === "teams" ? ({ in_meeting: "Teams · in meeting", paused: "Teams · paused" }[S.bot.state] || "Teams") : "Live · AI";
     }
     else if (status === "paused") { pill.classList.add("paused"); txt = "Paused"; }
     else if (status === "finished") { pill.classList.add("finished"); txt = "Meeting ended"; }
@@ -479,6 +484,7 @@
     if (running) S.summaryWriting = false;
     setSummaryItem();
     updateMicUI();
+    updateTeamsUI();
   }
 
   function setMode(mode, fromServer) {
@@ -488,15 +494,67 @@
     $("runSelect").hidden = mode !== "replay";
     setLabel($("btnStart"), "play", mode === "replay" ? "Play recording" : "Start meeting");
     $("micBox").hidden = mode !== "mic";
-    $("speedSeg").hidden = mode === "mic";
-    $("btnPause").hidden = mode === "mic";
+    $("teamsBox").hidden = mode !== "teams";
+    $("btnStart").hidden = mode === "teams";        // Teams joins from its own panel (Join meeting next to the link)
+    $("speedSeg").hidden = mode === "mic" || mode === "teams";
+    $("btnPause").hidden = mode === "mic" || mode === "teams";
     if (!S.utts.size) {
-      $("transcriptEmpty").innerHTML = mode === "mic"
+      $("transcriptEmpty").innerHTML = mode === "teams"
+        ? "Paste a Teams meeting link and press <b>Join meeting</b>. A bot joins (admit it from the lobby), and the whiteboard draws itself from what everyone says."
+        : mode === "mic"
         ? "Press <b>Start talking</b> and describe what you are designing, out loud. Your words appear here as you speak, and the whiteboard draws itself from them."
         : "Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.";
     }
     if (mode === "replay" && !fromServer) loadRuns();
     updateMicUI();
+    updateTeamsUI();
+  }
+
+  // ---------------------------------------------------------- Teams meeting
+  const BOT_TEXT = { idle: "Bot not started", creating: "Starting the bot…", joining: "Joining the meeting…",
+                     waiting_room: "Waiting in the lobby · admit “Whiteboard”", in_meeting: "In the meeting",
+                     paused: "Paused · not listening",
+                     leaving: "Leaving…", ended: "Bot left", error: "Bot stopped" };
+
+  function onBotState(ev) {
+    S.bot = { ...S.bot, ...ev };
+    setStatus(S.status, S.mode, null);
+  }
+
+  function updateTeamsUI() {
+    if (S.mode !== "teams") return;
+    const running = S.status === "running";
+    const st = running || S.status === "finished" ? (S.bot.state || "idle") : "idle";
+    const name = S.bot.bot_name || "Whiteboard";
+    $("botRec").className = `rec rec-${st}`;
+    const room = S.bot.breakout_room;
+    $("botStateText").textContent = st === "joining" && room
+      ? `Joining · moves to “${room}” when it opens`
+      : (BOT_TEXT[st] || st).replace("Whiteboard", name);
+    $("botErr").hidden = !S.bot.error;
+    $("botErr").textContent = S.bot.error || "";
+    $("teamsUrl").disabled = $("teamsRoom").disabled = running;
+    // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
+    $("teamsFields").hidden = $("botHint").hidden = running;
+    $("btnTeamsPause").hidden = !running || (st !== "in_meeting" && st !== "paused");
+    $("btnTeamsPause").textContent = st === "paused" ? "▶ Resume" : "❚❚ Pause";
+    const btn = $("btnTeamsJoin");
+    if (!running) {
+      btn.disabled = !!S.bot.error && st === "idle";      // missing Attendee settings: nothing to start yet
+      setLabel(btn, "users", S.status === "finished" ? "Join another meeting" : "Join meeting");
+      return;
+    }
+    btn.disabled = st === "leaving";
+    setLabel(btn, "stop", "Stop");
+  }
+
+  function teamsClick() {
+    if (S.status === "running") { send({ cmd: "stop" }); return; }
+    const url = $("teamsUrl").value.trim();
+    const room = $("teamsRoom").value.trim();
+    store.set("lw.teamsUrl", url);
+    store.set("lw.teamsRoom", room);
+    send({ cmd: "start", mode: "teams", meeting_url: url, breakout_room: room || null });   // no topic: the agents infer it from the talk
   }
 
   // -------------------------------------------------------------- talk live
@@ -595,10 +653,18 @@
   }));
   $("btnStart").addEventListener("click", () => {
     if (S.mode === "mic") return micClick();
+    if (S.mode !== "live" && S.mode !== "replay") return;   // Teams joins from its panel; never start an unknown mode
     send({ cmd: "start", mode: S.mode, run: S.mode === "replay" ? $("runSelect").value : undefined, speed: S.speed });
   });
   $("micName").value = store.get("lw.micName") || "";
   $("micTopic").value = store.get("lw.micTopic") || "";
+  $("teamsUrl").value = store.get("lw.teamsUrl") || "";
+  $("teamsRoom").value = store.get("lw.teamsRoom") || "";
+  $("btnTeamsJoin").addEventListener("click", teamsClick);
+  $("btnTeamsPause").addEventListener("click", () => send({ cmd: "listen", on: S.bot.state === "paused" }));
+  $("teamsUrl").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !$("btnTeamsJoin").disabled && S.status !== "running") { e.preventDefault(); teamsClick(); }
+  });
   $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
   $("btnReset").addEventListener("click", () => {
     if (S.utts.size > 0 && S.mode !== "replay" && !confirm("Clear the whiteboard and transcript and start fresh?")) return;
@@ -753,6 +819,7 @@
     if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
     if (!$("specModal").hidden) return;  // reading the spec: Space scrolls it, not start/pause
     if (e.code === "KeyE" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleExpand(); return; }
+    if (S.mode === "teams") return;
     if (S.mode === "mic") {              // no space-bar shortcut while talking live; M toggles mute
       if (e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }
       return;

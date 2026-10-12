@@ -116,3 +116,22 @@ utterance, closed upstream, saved the run; in the desktop app's browser pane, th
 real `pcm-worklet.js` turned a 48 kHz 1 kHz oscillator into 24 kHz PCM16 chunks of 1200 samples with the tone intact, interim
 text rendered live in italics during a feed run, and a talk-live run replayed. Real microphone capture could not be tested
 (the pane blocks mic access and nobody could speak); the permission-denied handling is in code but untested in a real browser.
+
+## Teams breakout rooms (tested 2026-10-11, anonymous Attendee bot, Teams web "light meetings" client)
+
+- **Following the organizer's moves** works in Teams but not in Attendee as is: moving to a room hangs up the main call
+  and starts a new one (about 16 s, "We'll move you to your assigned room in 10 seconds"). Audio keeps flowing, but
+  captions stay off and the participant list freezes, because Attendee keeps using the first call object it saw. "Close
+  rooms" moves everyone back the same way, and captions resume in the main meeting; a person's own "Return" doesn't move the bot.
+- **What we built instead:** the bot reads the room list in the main meeting
+  (`callingDebug.observableCall.breakoutDetails.mainMeetingProperties.allBreakoutRooms`: name, `isOpen`,
+  `meetingJoinUrl`), visible even when it isn't assigned to a room. Each room is an ordinary `meetup-join` meeting that keeps its link
+  between sessions. Joining it fresh gives working captions and participants with no call switching. Patch:
+  `docs/attendee-teams.patch`.
+- **Lobby:** a bot joining a room by link waits in that room's lobby until someone in the room admits it, even when
+  the main meeting lets guests straight in.
+- **Room-end signals:** inside a room the bot gets `conversationEnd` messages (subCode 5012/5020) for *other*
+  conversations, with other call ids, while its own call stays connected. Attendee's meeting-id check correctly ignores
+  them; don't relax it. When the bot's room emptied, the end message also carried a different id, so the bot left through
+  Attendee's 60 s "only participant" rule instead.
+- Not tested: signed-in bots, rooms with automatic moves turned off, a meeting run by another organisation (who may admit from the room lobby).

@@ -151,7 +151,7 @@ class ApprovalGate:
             "summary": summary, "ops": result["applied"], "rejected": result["rejected"],
             "latency_ms": None, "t": self._elapsed()}})
         await self._emit_approvals()
-        if self.status == "finished" and self.run_file and self.mode in ("live", "mic"):
+        if self.status == "finished" and self.run_file and self.mode in ("live", "mic", "teams"):
             self._save_run(complete=True)   # keep the saved run in step with the board
 
     def _still_applies(self, p: dict) -> str | None:

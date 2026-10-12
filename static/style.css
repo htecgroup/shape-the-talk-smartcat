@@ -192,6 +192,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
 .mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
 .mic-row { display: flex; align-items: center; gap: 10px; }
+#teamsBox .mic-row .rec { white-space: normal; min-width: 0; }   /* long bot states wrap instead of pushing Join out */
+#btnTeamsJoin { margin-left: auto; white-space: nowrap; flex: none; }
+#btnTeamsPause { margin-left: auto; white-space: nowrap; flex: none; }
+#btnTeamsPause:not([hidden]) + #btnTeamsJoin { margin-left: 0; }
 .rec { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
 .rec .dot { width: 9px; height: 9px; border-radius: 50%; background: #ced4da; }
 .rec-listening { color: var(--orange-ink); }
@@ -200,6 +204,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .rec-connecting, .rec-stopping { color: #946200; }
 .rec-muted { color: var(--muted); }
 .rec-muted .dot { background: #adb5bd; }
+.rec-joining .dot, .rec-waiting_room .dot, .rec-leaving .dot, .rec-creating .dot { background: #f59f00; animation: blink .6s infinite; }
+.rec-joining, .rec-waiting_room, .rec-leaving, .rec-creating { color: #946200; }
+.rec-in_meeting { color: #2b8a3e; }
+.rec-in_meeting .dot { background: #2f9e44; box-shadow: 0 0 0 3px rgba(47, 158, 68, .18); }
+.rec-paused { color: var(--muted); }
+.rec-paused .dot { background: #adb5bd; }
 .rec-error { color: var(--bad); }
 .rec-error .dot { background: var(--bad); }
 .meter { flex: 1; height: 8px; border-radius: 99px; background: var(--line-2); overflow: hidden; }
