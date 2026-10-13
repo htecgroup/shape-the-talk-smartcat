@@ -524,7 +524,7 @@
 
   // ---------------------------------------------------------- Teams meeting
   const BOT_TEXT = { idle: "Bot not started", creating: "Starting the bot…", joining: "Joining the meeting…",
-                     waiting_room: "Waiting in the lobby · admit “Whiteboard”", in_meeting: "In the meeting",
+                     waiting_room: "Waiting in the lobby · admit “{bot}”", in_meeting: "In the meeting",
                      paused: "Paused · not listening",
                      leaving: "Leaving…", ended: "Bot left", error: "Bot stopped" };
 
@@ -537,12 +537,13 @@
     if (S.mode !== "teams") return;
     const running = S.status === "running";
     const st = running || S.status === "finished" ? (S.bot.state || "idle") : "idle";
-    const name = S.bot.bot_name || "Whiteboard";
+    const name = S.bot.bot_name || "the bot";   // the server sends the name (LW_ATTENDEE_BOT_NAME)
     $("botRec").className = `rec rec-${st}`;
     const room = S.bot.breakout_room;
     $("botStateText").textContent = st === "joining" && room
       ? `Joining · moves to “${room}” when it opens`
-      : (BOT_TEXT[st] || st).replace("Whiteboard", name);
+      : (BOT_TEXT[st] || st).replace("{bot}", name);
+    $("botName").textContent = name;
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
     $("teamsUrl").disabled = $("teamsRoom").disabled = running;

@@ -58,7 +58,7 @@ ATTENDEE_URL = os.getenv("ATTENDEE_URL", "http://localhost:8000").rstrip("/")
 API_KEY = os.getenv("ATTENDEE_API_KEY", "")
 WEBHOOK_SECRET = os.getenv("ATTENDEE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.getenv("LW_PUBLIC_URL", "").rstrip("/")
-BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Whiteboard"
+BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Klaudije"   # the one default; the page shows what the server sends
 TRANSCRIPTION = os.getenv("LW_ATTENDEE_TRANSCRIPTION", "captions").strip().lower()   # captions | openai
 TEAMS_LANGUAGE = os.getenv("ATTENDEE_TEAMS_LANGUAGE", "").strip()                    # captions language, e.g. en-us
 TEAMS_LOGIN = os.getenv("ATTENDEE_TEAMS_LOGIN", "0").strip() == "1"

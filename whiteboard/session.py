@@ -133,7 +133,7 @@ class Session(AgentPipeline, ApprovalGate):
             "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
-                   else {"state": "idle", "error": attendee.config_error()},
+                   else {"state": "idle", "error": attendee.config_error(), "bot_name": attendee.BOT_NAME},
         }
 
     def spec_inputs(self) -> tuple[list[dict], list[dict]]:

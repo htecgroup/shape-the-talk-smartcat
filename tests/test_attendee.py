@@ -135,7 +135,7 @@ def test_create_bot_request(teams, monkeypatch):
         src = await start_teams(s)
         url, body = teams["http"].calls[0]
         assert url == "/api/v1/bots" and body["meeting_url"].startswith("https://teams.microsoft.com")
-        assert body["bot_name"] == "Whiteboard"
+        assert body["bot_name"] == attendee.BOT_NAME
         assert body["transcription_settings"] == {"meeting_closed_captions": {}}
         assert body["webhooks"] == [{"url": "https://wb.example.com/api/attendee/webhook",
                                      "triggers": ["transcript.update", "transcript.partial",
@@ -207,9 +207,9 @@ def test_participants_are_added_with_new_colours_and_the_bot_is_ignored(teams):
         s.clients.add(viewer)
         src = await start_teams(s)
         join = lambda name, key: hook("participant_events.join_leave", {"participant_name": name, "event_type": "join"}, key)
-        await src.handle_webhook(join("Whiteboard", "j0"))              # the bot itself
+        await src.handle_webhook(join(attendee.BOT_NAME, "j0"))              # the bot itself
         await src.handle_webhook(join("Maja", "j1"))
-        await src.handle_webhook(transcript("Whiteboard", "I am the bot talking", 500, "t0"))
+        await src.handle_webhook(transcript(attendee.BOT_NAME, "I am the bot talking", 500, "t0"))
         await src.handle_webhook(transcript("Stefan", "A new speaker joins by speaking.", 1000, "t1"))
         await src.handle_webhook(transcript("Maja", "And Maja again.", 2000, "t2"))
         await src.handle_webhook(hook("participant_events.join_leave", {"participant_name": "Lena", "event_type": "leave"}, "j2"))
@@ -609,7 +609,7 @@ def test_partials_retries_out_of_order_bot_and_filler(teams, monkeypatch):
         await src.handle_webhook(partial("Maja", "c1", 3, "Payment first. Then delivery.", final=True))
         await src.handle_webhook(partial("Maja", "c1", 3, "Payment first. Then delivery.", final=True, key="again"))
         assert texts(s) == ["Payment first.", "Then delivery."]
-        await src.handle_webhook(partial("Whiteboard", "b1", 1, "I am the bot.", final=True))
+        await src.handle_webhook(partial(attendee.BOT_NAME, "b1", 1, "I am the bot.", final=True))
         await src.handle_webhook(partial("Stefan", "f1", 1, "Okay.", final=True))
         await grow(src, "Stefan", "f2", ["Okay.", "Okay. So the", "Okay. So the menu"])
         await src.handle_webhook(partial("Stefan", "f2", 4, "Okay. So the menu.", final=True))
