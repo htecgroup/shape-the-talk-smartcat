@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -173,9 +174,10 @@ def test_idle_rooms_are_dropped_and_released():
     async def run():
         idle, watched, running, recent = [await server.get_session(r) for r in ("idle", "watched", "running", "recent")]
         idle.source = FakeSource()
-        idle.status = "finished"
+        idle.mode, idle.status = "mic", "finished"
         watched.clients.add(FakeSocket())
-        running.status = "running"
+        running.mode, running.status = "live", "running"
+        recent.mode, recent.status = "replay", "finished"     # used rooms keep their board for ROOM_IDLE_S
         now = idle.last_active + server.ROOM_IDLE_S + 5
         recent.last_active = now - 60
         for s in (watched, running):
@@ -189,6 +191,20 @@ def test_idle_rooms_are_dropped_and_released():
         assert set(await server.sweep_rooms(now + server.ROOM_IDLE_S + 1)) == {"running", "recent"}
         assert set(server.rooms) == {"watched"}
         assert (await server.get_session("idle")) is not idle    # its link opens a fresh board
+    asyncio.run(run())
+
+
+def test_a_room_nothing_was_started_in_is_dropped_after_a_minute():
+    async def run():
+        empty, used = await server.get_session("empty"), await server.get_session("used")
+        used.mode, used.status = "live", "finished"
+        now = max(empty.last_active, used.last_active)
+        assert await server.sweep_rooms(now + server.EMPTY_ROOM_IDLE_S - 1) == []
+        assert await server.sweep_rooms(now + server.EMPTY_ROOM_IDLE_S + 1) == ["empty"]
+        assert set(server.rooms) == {"used"}
+        empty = await server.get_session("empty")
+        empty.clients.add(FakeSocket())                      # someone is still looking at it: kept
+        assert "empty" not in await server.sweep_rooms(time.monotonic() + 10 * server.ROOM_IDLE_S)
     asyncio.run(run())
 
 

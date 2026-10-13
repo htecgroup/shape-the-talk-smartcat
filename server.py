@@ -43,11 +43,13 @@ STATIC = Path(__file__).parent / "static"
 
 # ------------------------------------------------------------------ rooms
 # One Session per room, created when a room is first used. A room nobody is connected to and where nothing runs is
-# dropped after ROOM_IDLE_S (its link then opens a fresh board). The default room does not count toward the cap.
+# dropped after ROOM_IDLE_S (its link then opens a fresh board), or after EMPTY_ROOM_IDLE_S if nothing was ever started
+# in it (a visitor who opened the page and left). The default room does not count toward the cap.
 DEFAULT_ROOM = "default"
 ROOM_ID = re.compile(r"^[a-z0-9-]{1,32}$")
 MAX_ROOMS = int(os.environ.get("LW_MAX_ROOMS", "20"))
 ROOM_IDLE_S = 30 * 60
+EMPTY_ROOM_IDLE_S = 60      # a room with no meeting, talk, Teams bot or replay in it has nothing to keep
 SWEEP_EVERY_S = 60
 rooms: dict[str, Session] = {}
 
@@ -82,13 +84,14 @@ def _counted() -> int:
 
 
 async def sweep_rooms(now: float | None = None) -> list[str]:
-    """Drop the rooms idle for ROOM_IDLE_S. A busy room (viewer, mic, meeting, final summary, spec) counts as active."""
+    """Drop the rooms idle for ROOM_IDLE_S (EMPTY_ROOM_IDLE_S if never used). A busy room (viewer, mic, meeting, final
+    summary, spec) counts as active."""
     now = time.monotonic() if now is None else now
     gone = []
     for room, s in list(rooms.items()):
         if s.busy():
             s.last_active = now
-        elif now - s.last_active >= ROOM_IDLE_S:
+        elif now - s.last_active >= (EMPTY_ROOM_IDLE_S if s.mode == "idle" else ROOM_IDLE_S):
             rooms.pop(room, None)
             gone.append(room)
             try:
@@ -96,7 +99,7 @@ async def sweep_rooms(now: float | None = None) -> list[str]:
             except Exception:
                 log.exception("room %s: reset on drop failed", room)
     if gone:
-        log.info("rooms dropped after %d min idle: %s (%d live)", ROOM_IDLE_S // 60, ", ".join(gone), len(rooms))
+        log.info("idle rooms dropped: %s (%d live)", ", ".join(gone), len(rooms))
     return gone
 
 

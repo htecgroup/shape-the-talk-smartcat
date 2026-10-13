@@ -16,7 +16,7 @@ Every visitor gets their own board: the page adds a random `?room=<id>` to its U
 copies the link). Whoever opens the same link sees the same board live and can control it (Start, Reset, approvals).
 `?replay=latest` and `?room=` combine. Without a room (scripts, `curl /api/control`) the server uses the `default`
 room. At most `LW_MAX_ROOMS` rooms (20) are open at once; a room with no one connected and nothing running is dropped
-after 30 minutes, and its link then opens an empty board.
+after 30 minutes (after 1 minute if nothing was ever started in it), and its link then opens an empty board.
 
 The server still supports scripted meetings (`data/meeting_*.json`) for `scripts/simulate.py`.
 

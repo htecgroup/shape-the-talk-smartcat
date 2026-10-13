@@ -54,7 +54,7 @@ both sockets, `/api/state`, `/api/control` and `/api/export/*` all take the room
 session has its own board, pipeline, approvals, spec guard and viewers, so a command or event never leaves its room.
 Attendee posts every bot's webhooks to one URL; the server hands each to the room whose bot has that `bot_id`. A
 background sweep (every minute, and when the cap is hit) drops a room after 30 minutes without viewers, mic socket,
-running meeting, final summary or spec, through `Session.reset()` (closes the source, cancels its tasks).
+running meeting, final summary or spec (`EMPTY_ROOM_IDLE_S`, 1 minute, for a room nothing was ever started in), through `Session.reset()` (closes the source, cancels its tasks).
 `LW_MAX_ROOMS` caps the rooms (the default room is extra); past it a new room is refused with a message the page shows.
 
 ## The renderer
