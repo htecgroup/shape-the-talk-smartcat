@@ -106,23 +106,25 @@
 
   // --------------------------------------------------------------- feedback
   // The button opens the team's anonymous form (LW_FEEDBACK_URL; hidden without one). It never pops up: once a live
-  // meeting has ended it only gets a small pulsing dot, once per page, until it is used.
+  // meeting has ended (once per page) it turns orange and asks "How was it?" with a pulsing dot, until it is used or
+  // the next meeting starts.
   const FEEDBACK_TITLE = "Feedback or a feature request? Opens a short anonymous form (your name isn't recorded)";
   function setFeedback(url) {
     S.feedbackUrl = url || null;
     $("btnFeedback").hidden = !S.feedbackUrl;
-    if (!$("btnFeedback").classList.contains("nudge")) $("btnFeedback").title = FEEDBACK_TITLE;
   }
-  function nudgeFeedback() {
-    if (S.feedbackNudged || !S.feedbackUrl) return;
-    S.feedbackNudged = true;
-    $("btnFeedback").classList.add("nudge");
-    $("btnFeedback").title = "How did that meeting go? " + FEEDBACK_TITLE;
+  function nudgeFeedback(on) {
+    if (on && (S.feedbackNudged || !S.feedbackUrl)) return;
+    if (!on && !$("btnFeedback").classList.contains("nudge")) return;
+    if (on) S.feedbackNudged = true;
+    $("btnFeedback").classList.toggle("nudge", on);
+    setLabel($("btnFeedback"), "message", on ? "How was it?" : "Feedback");
+    $("btnFeedback").title = on ? "How did that meeting go? " + FEEDBACK_TITLE : FEEDBACK_TITLE;
   }
+  $("btnFeedback").title = FEEDBACK_TITLE;
   $("btnFeedback").addEventListener("click", () => {
     if (S.feedbackUrl) window.open(S.feedbackUrl, "_blank", "noopener");
-    $("btnFeedback").classList.remove("nudge");
-    $("btnFeedback").title = FEEDBACK_TITLE;
+    nudgeFeedback(false);
   });
 
   // ---------------------------------------------------------------- meeting
@@ -490,7 +492,8 @@
   function setStatus(status, mode, speed) {
     const was = S.status;
     S.status = status; if (mode) S.mode = mode === "idle" ? S.mode : mode;
-    if ((was === "running" || was === "paused") && status === "finished" && S.mode !== "replay") nudgeFeedback();
+    if ((was === "running" || was === "paused") && status === "finished" && S.mode !== "replay") nudgeFeedback(true);
+    else if (status === "running") nudgeFeedback(false);
     if (speed) { S.speed = speed; document.querySelectorAll("#speedSeg button").forEach((b) => b.classList.toggle("on", +b.dataset.speed === +speed)); }
     S.paused = status === "paused";
     const pill = $("statusPill");

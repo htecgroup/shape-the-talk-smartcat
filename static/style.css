@@ -113,8 +113,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .pill.paused { background: #fff3bf; color: #946200; }
 .pill.finished { background: #ebfbee; color: #2b8a3e; }
 @keyframes blink { 50% { opacity: .25; } }
-/* Feedback: after a meeting a small dot pulses a few times, until the button is used */
-#btnFeedback { position: relative; }
+/* Feedback: a purple tint (the logo's second colour) so it is easy to find without competing with the actions;
+   after a meeting it turns orange, asks "How was it?" and a small dot pulses a few times, until it is used */
+#btnFeedback { position: relative; background: var(--purple-soft); color: var(--purple-ink); border-color: #d9d4fc; }
+#btnFeedback:hover { background: #e3dffd; border-color: #c9c2fb; }
+#btnFeedback.nudge { background: var(--orange-soft); color: var(--orange-ink); border-color: #ffd6ad; }
+#btnFeedback.nudge:hover { background: #ffe5cc; border-color: #ffc890; }
 #btnFeedback.nudge::after {
   content: ""; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
   background: var(--orange); animation: nudge 1.6s ease-out 3;
