@@ -473,6 +473,10 @@
     pill.className = "pill";
     const running = status === "running" || status === "paused";
     document.querySelector(".panel.meeting").classList.toggle("in-meeting", running);
+    // with no meeting there is nothing to focus on (and the setup fields stay visible anyway)
+    $("btnFocus").disabled = status === "idle";
+    $("btnFocus").title = status === "idle" ? "Focus works once a meeting has started"
+      : "Hide setup and participants to focus on the transcript";
     let txt = "Idle";
     if (status === "running") {
       pill.classList.add(S.mode === "replay" ? "replay" : "live");
