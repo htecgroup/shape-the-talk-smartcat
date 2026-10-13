@@ -26,7 +26,7 @@ goes through the queue first"*, the board redraws itself.
   left to right.
 - **You stay in control:** *Ask first* mode makes the AI ask before it removes anything.
 - **After the meeting:** export PNG, JSON or Mermaid, generate a short spec, and read an auto-written meeting summary.
-  Every meeting is recorded and can be replayed.
+  Every meeting is recorded (`runs/`).
 - **Bonus, in Claude Code:** the [`shapethetalk` plugin](claude-mod/shapethetalk/README.md) lets Claude draw the
   same hand-drawn diagrams live in a pane beside the conversation while it explains code.
 
@@ -53,9 +53,6 @@ uv run uvicorn server:app --port 8010
 ```
 
 Open http://localhost:8010, click **Start talking** and describe a system.
-
-**No keys? Watch a recorded meeting:** http://localhost:8010/?replay=latest replays the newest recorded run with no API
-calls.
 
 ## Docs
 

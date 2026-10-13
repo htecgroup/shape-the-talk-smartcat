@@ -18,10 +18,10 @@
   const inRoom = (path) => `${path}?room=${encodeURIComponent(ROOM)}`;
 
   const S = {
-    ws: null, mode: "mic", status: "idle", speed: 1,
+    ws: null, mode: "mic", status: "idle",
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
-    utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
+    utts: new Map(), activity: [], paused: false,
     source: "idle",                           // what the current meeting is: idle (none yet) | scripted | mic | teams
     meetingTitle: "",  // the server's title, used in export filenames
     mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
@@ -75,7 +75,7 @@
       case "status": setServerMode(ev.mode); return setStatus(ev.status, ev.mode, ev.speed);
       case "run_saved":   // saved after the summary, so writing it is over (done or failed)
         S.summaryWriting = false; setSummaryItem();
-        toast("System", `Run recorded → runs/${ev.file}. Replay it with ?replay=latest`); return loadRuns();
+        return toast("System", `Run recorded → runs/${ev.file}`);
       case "error": return toast("System", ev.error);
     }
   }
@@ -105,20 +105,14 @@
     if (s.mic) S.mic = s.mic; else if (s.mode !== "mic") S.mic = { state: "idle" };
     setStatus(s.status, s.mode, s.speed);
     renderApprovals(s.approvals || []);
-    fillRuns(s.runs);
     setFeedback(s.feedback_url);
     updateProgress();
-    if (S.autoReplay && (s.status === "idle" || s.status === "finished")) {
-      setMode("replay");
-      send({ cmd: "start", mode: "replay", run: S.autoReplay, speed: S.speed });
-      S.autoReplay = null;
-    }
   }
 
   // --------------------------------------------------------------- feedback
   // The button opens the team's anonymous form (LW_FEEDBACK_URL; hidden without one). Nothing pops up over the work:
-  // once a live meeting has ended (once per page) a callout points at the button ("How was it?") and its dot pulses,
-  // until the form is opened, the callout is dismissed, or the next meeting starts.
+  // once a live meeting with a transcript has ended (once per page) a callout points at the button ("How was it?"),
+  // its dot pulses, until the form is opened, the callout is dismissed, or the next meeting starts.
   function setFeedback(url) {
     S.feedbackUrl = url || null;
     $("btnFeedback").hidden = !S.feedbackUrl;
@@ -164,13 +158,13 @@
   // where the transcript comes from; before a meeting (and after Reset) it describes the chosen mode
   function renderTranscriptSub() {
     const kind = S.source === "idle" ? S.mode : S.source;
-    $("transcriptSub").textContent = { mic: "live microphone · OpenAI realtime", teams: "Teams meeting · Attendee bot",
-                                       replay: "recorded meeting" }[kind] || "simulated · no audio";
+    $("transcriptSub").textContent = { mic: "live microphone · OpenAI realtime", teams: "Teams meeting · Attendee bot" }[kind]
+      || "simulated · no audio";
   }
 
   function renderMeetingHead() {
     const started = S.status === "running" || S.status === "paused";
-    const matches = started || (S.mode === "replay" ? S.serverMode === "replay" : (S.mode === "mic") === (S.source === "mic"));
+    const matches = started || (S.mode === "mic") === (S.source === "mic");
     $("participants").hidden = !matches;
   }
 
@@ -504,9 +498,9 @@
   function setStatus(status, mode, speed) {
     const was = S.status;
     S.status = status; if (mode) S.mode = mode === "idle" ? S.mode : mode;
-    if ((was === "running" || was === "paused") && status === "finished" && S.mode !== "replay") nudgeFeedback(true);
+    // ask how it went only after a meeting that had something in it: not after a bot that never started or stayed paused
+    if ((was === "running" || was === "paused") && status === "finished" && S.mode !== "replay" && S.utts.size > 0) nudgeFeedback(true);
     else if (status === "running") nudgeFeedback(false);
-    if (speed) { S.speed = speed; document.querySelectorAll("#speedSeg button").forEach((b) => b.classList.toggle("on", +b.dataset.speed === +speed)); }
     S.paused = status === "paused";
     const pill = $("statusPill");
     pill.className = "pill";
@@ -526,10 +520,8 @@
     else if (status === "finished") { pill.classList.add("finished"); txt = "Meeting ended"; }
     $("statusText").textContent = txt;
     $("btnStart").disabled = running;
-    $("btnPause").disabled = !running;
-    setLabel($("btnPause"), status === "paused" ? "play" : "pause", status === "paused" ? "Resume" : "Pause");
     if (status === "paused") setSpeaking(null, false);
-    if (mode && mode !== "idle") setMode(mode, true);
+    if (mode && mode !== "idle") setMode(mode);
     renderMeetingHead();
     if (running) S.summaryWriting = false;
     setSummaryItem();
@@ -537,26 +529,20 @@
     updateTeamsUI();
   }
 
-  function setMode(mode, fromServer) {
+  function setMode(mode) {
     S.mode = mode;
     renderMeetingHead();
     renderTranscriptSub();
     document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
-    $("runSelect").hidden = mode !== "replay";
-    setLabel($("btnStart"), "play", mode === "replay" ? "Play recording" : "Start meeting");
+    setLabel($("btnStart"), "play", "Start meeting");
     $("micBox").hidden = mode !== "mic";
     $("teamsBox").hidden = mode !== "teams";
     $("btnStart").hidden = mode === "teams";        // Teams joins from its own panel (Join meeting next to the link)
-    $("speedSeg").hidden = mode === "mic" || mode === "teams";
-    $("btnPause").hidden = mode === "mic" || mode === "teams";
     if (!S.utts.size) {
       $("transcriptEmpty").innerHTML = mode === "teams"
         ? "Paste a Teams meeting link and press <b>Join meeting</b>. A bot joins (admit it from the lobby), and the whiteboard draws itself from what everyone says."
-        : mode === "mic"
-        ? "Press <b>Start talking</b> and describe what you are designing, out loud. Your words appear here as you speak, and the whiteboard draws itself from them."
-        : "Press <b>Start meeting</b>. Four people will brainstorm the FreshBite order flow, and the whiteboard will draw itself as they talk.";
+        : "Press <b>Start talking</b> and describe what you are designing, out loud. Your words appear here as you speak, and the whiteboard draws itself from them.";
     }
-    if (mode === "replay" && !fromServer) loadRuns();
     updateMicUI();
     updateTeamsUI();
   }
@@ -688,30 +674,12 @@
     updateMicUI();
   }
 
-  async function loadRuns() {
-    try { fillRuns(await (await fetch("/api/runs")).json()); } catch { /* offline */ }
-  }
-  function fillRuns(runs = []) {
-    const sel = $("runSelect");
-    const prev = sel.value;
-    sel.innerHTML = `<option value="latest">Latest complete run</option>` + runs.map((r) =>
-      `<option value="${esc(r.file)}">${r.source === "mic" ? "Talk live · " : ""}${esc(r.file.replace(".json", ""))}${r.complete ? "" : " (partial)"}${r.source === "mic" ? "" : ` · ${r.speed}×`}</option>`).join("");
-    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
-  }
-
   document.querySelectorAll("#modeSeg button").forEach((b) => b.addEventListener("click", () => {
     if (S.status === "running" || S.status === "paused") return;
     setMode(b.dataset.mode);
   }));
-  document.querySelectorAll("#speedSeg button").forEach((b) => b.addEventListener("click", () => {
-    S.speed = +b.dataset.speed;
-    document.querySelectorAll("#speedSeg button").forEach((x) => x.classList.toggle("on", x === b));
-    if (S.status === "running" || S.status === "paused") send({ cmd: "speed", speed: S.speed });
-  }));
   $("btnStart").addEventListener("click", () => {
-    if (S.mode === "mic") return micClick();
-    if (S.mode !== "live" && S.mode !== "replay") return;   // Teams joins from its panel; never start an unknown mode
-    send({ cmd: "start", mode: S.mode, run: S.mode === "replay" ? $("runSelect").value : undefined, speed: S.speed });
+    if (S.mode === "mic") micClick();   // Teams joins from its own panel
   });
   $("micName").value = store.get("lw.micName") || "";
   $("micTopic").value = store.get("lw.micTopic") || "";
@@ -735,7 +703,6 @@
   $("teamsUrl").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !$("btnTeamsJoin").disabled && S.status !== "running") { e.preventDefault(); teamsClick(); }
   });
-  $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
   $("btnReset").addEventListener("click", () => {
     if (S.utts.size > 0 && S.mode !== "replay" && !confirm("Clear the whiteboard and transcript and start fresh?")) return;
     send({ cmd: "reset" });
@@ -890,12 +857,8 @@
     if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
     if (!$("specModal").hidden) return;  // reading the spec: Space scrolls it, not start/pause
     if (e.code === "KeyE" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleExpand(); return; }
-    if (S.mode === "teams") return;
-    if (S.mode === "mic") {              // no space-bar shortcut while talking live; M toggles mute
-      if (e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }
-      return;
-    }
-    if (e.code === "Space") { e.preventDefault(); if (S.status === "running" || S.status === "paused") $("btnPause").click(); else $("btnStart").click(); }
+    // M toggles mute while talking live
+    if (S.mode === "mic" && e.code === "KeyM" && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); toggleMute(); }
   });
 
   $("roomId").textContent = ROOM;
@@ -908,7 +871,7 @@
     }
   });
 
-  setMode(S.autoReplay ? "replay" : "mic");
+  setMode("mic");
   renderTabs();
   connect();
 })();
