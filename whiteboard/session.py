@@ -36,6 +36,23 @@ log = logging.getLogger("session")
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
+# The anonymous form the Feedback button opens (a Microsoft Form that doesn't record names)
+DEFAULT_FEEDBACK_URL = ("https://forms.cloud.microsoft/Pages/ResponsePage.aspx"
+                        "?id=W2aFn_1-dked_ra_2iVl7mmPv_vSKwpFnB1aZeBfM4pUOVNDWk82TzhQTTBLQ0U2RThCTFNHSU9LQS4u")
+
+
+def feedback_url(value: str | None) -> str | None:
+    """LW_FEEDBACK_URL: unset is the team's form, empty hides the button; only web links are opened."""
+    url = DEFAULT_FEEDBACK_URL if value is None else value.strip()
+    return url if url.startswith(("https://", "http://")) else None
+
+
+FEEDBACK_URL = feedback_url(os.getenv("LW_FEEDBACK_URL"))
+
+
+def idle_meeting() -> dict:
+    """The meeting before one starts and after Reset: nobody in it, so nothing of an earlier meeting shows."""
+    return {"id": None, "source": "idle", "title": "", "participants": [], "utterances": []}
 
 
 def load_meeting(path: Path | None = None) -> dict:
@@ -84,7 +101,6 @@ class Session(AgentPipeline, ApprovalGate):
         self.mic_sockets = 0                         # open /ws/mic sockets (server.py)
         self.spec_running = False                    # one spec at a time per room (server.py)
         self.last_active = time.monotonic()          # for dropping idle rooms (server.py)
-        self.meeting = load_meeting()
         self.approval_mode = DEFAULT_APPROVAL_MODE   # a room setting: survives Reset
         self._tasks: list[asyncio.Task] = []
         self._reset_state()
@@ -93,6 +109,7 @@ class Session(AgentPipeline, ApprovalGate):
     def _reset_state(self) -> None:
         self.mode = "idle"          # idle | live (scripted meeting) | mic (talk live) | teams (Attendee bot) | replay
         self.status = "idle"        # idle | running | paused | finished
+        self.meeting = idle_meeting()   # start() sets the real one
         self.clock = Clock()
         self.board = BoardState()
         self.spoken: list[dict] = []
@@ -130,6 +147,7 @@ class Session(AgentPipeline, ApprovalGate):
             "activity": self.view_activity[-150:], "board": self.view_board,
             "questions": self.questions, "disagreements": self.disagreements, "summary": self.summary,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
+            "feedback_url": FEEDBACK_URL,
             "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)

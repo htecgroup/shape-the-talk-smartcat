@@ -29,6 +29,11 @@ free to run for yourself, not to resell as a hosted service) and posts webhooks 
    the bot leave and runs the usual end-of-meeting cleanup and saves the run; if the meeting ends or someone removes
    the bot, that happens by itself.
 
+The bot is called Klaudije unless `LW_ATTENDEE_BOT_NAME` says otherwise; the page shows whatever name the server uses.
+As soon as it has joined, also while it is still paused, it introduces itself in the meeting chat ("Hi everyone,
+I'm Klaudije, an AI bot that listens to this meeting..."), so nobody wonders who is listening. `LW_ATTENDEE_INTRO=0`
+turns that off, and `LW_ATTENDEE_INTRO_TEXT` sets your own text (`{bot_name}` is replaced by the bot's name).
+
 ## Starts paused
 
 The bot joins **paused** (`LW_TEAMS_START_PAUSED=1`, the default), so whatever people say while the meeting is still

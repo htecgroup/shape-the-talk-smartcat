@@ -48,6 +48,7 @@ def teams(fake_pipeline, monkeypatch):
     monkeypatch.setattr(attendee, "API_KEY", "key")
     monkeypatch.setattr(attendee, "WEBHOOK_SECRET", SECRET)
     monkeypatch.setattr(attendee, "PUBLIC_URL", "https://wb.example.com")
+    monkeypatch.setattr(attendee, "INTRO", False)       # the intro tests turn it on
     monkeypatch.setattr(attendee, "START_PAUSED", False)      # these tests listen from the start; see "start paused" below
     http = FakeHttp()
     monkeypatch.setattr(AttendeeSource, "_http", lambda self: http)
@@ -141,7 +142,7 @@ def test_create_bot_request(teams, monkeypatch):
         src = await start_teams(s)
         url, body = teams["http"].calls[0]
         assert url == "/api/v1/bots" and body["meeting_url"].startswith("https://teams.microsoft.com")
-        assert body["bot_name"] == "Whiteboard"
+        assert body["bot_name"] == attendee.BOT_NAME
         assert body["transcription_settings"] == {"meeting_closed_captions": {}}
         assert body["webhooks"] == [{"url": "https://wb.example.com/api/attendee/webhook",
                                      "triggers": ["transcript.update", "transcript.partial",
@@ -213,9 +214,9 @@ def test_participants_are_added_with_new_colours_and_the_bot_is_ignored(teams):
         s.clients.add(viewer)
         src = await start_teams(s)
         join = lambda name, key: hook("participant_events.join_leave", {"participant_name": name, "event_type": "join"}, key)
-        await src.handle_webhook(join("Whiteboard", "j0"))              # the bot itself
+        await src.handle_webhook(join(attendee.BOT_NAME, "j0"))              # the bot itself
         await src.handle_webhook(join("Maja", "j1"))
-        await src.handle_webhook(transcript("Whiteboard", "I am the bot talking", 500, "t0"))
+        await src.handle_webhook(transcript(attendee.BOT_NAME, "I am the bot talking", 500, "t0"))
         await src.handle_webhook(transcript("Stefan", "A new speaker joins by speaking.", 1000, "t1"))
         await src.handle_webhook(transcript("Maja", "And Maja again.", 2000, "t2"))
         await src.handle_webhook(hook("participant_events.join_leave", {"participant_name": "Lena", "event_type": "leave"}, "j2"))
@@ -259,6 +260,24 @@ def test_bot_state_is_shown_and_ended_bot_ends_the_meeting(teams):
     saved = json.loads((recording.RUNS_DIR / run_file).read_text())
     assert saved["meta"]["source"] == "teams" and saved["meta"]["complete"]
     assert [p["name"] for p in saved["meeting"]["participants"]] == ["Maja"]
+
+
+def test_reset_leaves_nothing_of_the_meeting_before(teams):
+    async def run():
+        s = Session()
+        assert s.snapshot()["meeting"]["participants"] == []                  # no demo people before a meeting
+        src = await start_teams(s)
+        await src.handle_webhook(hook("participant_events.join_leave", {"event_type": "join", "participant_name": "Maja"}, "j1"))
+        await src.handle_webhook(transcript("Maja", "The customer opens the app.", 1000, "t1"))
+        await wait_for(lambda: s.spoken)
+        await s.reset()
+        snap = s.snapshot()
+        assert snap["status"] == "idle" and snap["bot"]["state"] == "idle"
+        assert snap["meeting"]["participants"] == [] and snap["meeting"]["title"] == ""
+        assert snap["transcript"] == [] and snap["board"]["boards"] == s.board.to_dict()["boards"]
+        assert teams["http"].calls[-1][0] == f"/api/v1/bots/{BOT}/leave"     # the bot was sent away
+
+    asyncio.run(run())
 
 
 def test_fatal_error_is_reported(teams):
@@ -311,6 +330,88 @@ def test_pause_and_resume_listening(teams):
         assert src.state == "in_meeting"
         await src.handle_webhook(state("joined_recording_paused", "s2"))     # paused from elsewhere shows too
         assert src.state == "paused"
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_bot_introduces_itself_in_the_chat_once(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "INTRO", True)
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("waiting_room", "s1"))
+        await asyncio.sleep(0.05)
+        assert not [c for c in teams["http"].calls if c[0] == intro]      # not from the lobby
+        await src.handle_webhook(state("joined_recording", "s2"))
+        await wait_for(lambda: any(c[0] == intro for c in teams["http"].calls))
+        await src.handle_webhook(state("joined_recording_paused", "s3"))
+        await src.handle_webhook(state("joined_recording", "s4"))         # resumed: no second intro
+        await asyncio.sleep(0.05)
+        sent = [body for url, body in teams["http"].calls if url == intro]
+        assert sent == [{"message": attendee.DEFAULT_INTRO.replace("{bot_name}", src.bot_name)}]
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_intro_is_sent_when_the_bot_joins_paused(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "INTRO", True)
+    monkeypatch.setattr(attendee, "START_PAUSED", True)                   # the default: joins paused until Resume
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await src.handle_webhook(state("joined_recording_paused", "s2"))  # Attendee paused it for us
+        await wait_for(lambda: any(c[0] == intro for c in teams["http"].calls))
+        assert src.state == "paused" and not src.listening                 # still not listening, but introduced
+        await asyncio.sleep(0.05)
+        assert len([c for c in teams["http"].calls if c[0] == intro]) == 1
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_intro_can_be_turned_off_or_changed(teams, monkeypatch):
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def joined(s, key):
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", key))
+        await asyncio.sleep(0.05)
+        await src.close()
+        return [body for url, body in teams["http"].calls if url == intro]
+
+    assert asyncio.run(joined(Session(), "s1")) == []                     # LW_ATTENDEE_INTRO=0
+    monkeypatch.setattr(attendee, "INTRO", True)
+    monkeypatch.setattr(attendee, "INTRO_TEXT", "{bot_name} is here to draw.")
+    assert asyncio.run(joined(Session(), "s2")) == [{"message": f"{attendee.BOT_NAME} is here to draw."}]
+
+
+def test_failed_intro_does_not_stop_the_meeting(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "INTRO", True)
+
+    class NoChat(FakeHttp):
+        async def post(self, url, json=None):
+            self.calls.append((url, json))
+            if url.endswith("/send_chat_message"):
+                raise RuntimeError("Attendee is down")
+            return FakeResponse({"id": BOT, "state": "joining"})
+
+    teams["http"].__class__ = NoChat
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await wait_for(lambda: src.intro is not None and src.intro.done())
+        await src.handle_webhook(transcript("Maja", "The customer opens the app.", 1000, "t1"))
+        await wait_for(lambda: s.spoken)
+        assert src.state == "in_meeting" and src.error is None
         await src.close()
 
     asyncio.run(run())
@@ -534,7 +635,7 @@ def test_partials_retries_out_of_order_bot_and_filler(teams, monkeypatch):
         await src.handle_webhook(partial("Maja", "c1", 3, "Payment first. Then delivery.", final=True))
         await src.handle_webhook(partial("Maja", "c1", 3, "Payment first. Then delivery.", final=True, key="again"))
         assert texts(s) == ["Payment first.", "Then delivery."]
-        await src.handle_webhook(partial("Whiteboard", "b1", 1, "I am the bot.", final=True))
+        await src.handle_webhook(partial(attendee.BOT_NAME, "b1", 1, "I am the bot.", final=True))
         await src.handle_webhook(partial("Stefan", "f1", 1, "Okay.", final=True))
         await grow(src, "Stefan", "f2", ["Okay.", "Okay. So the", "Okay. So the menu"])
         await src.handle_webhook(partial("Stefan", "f2", 4, "Okay. So the menu.", final=True))

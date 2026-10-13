@@ -7,14 +7,12 @@ Setup is in the [README](../README.md#run-it). This page covers the modes, the c
 - **🎙 Talk live** (the default): speak into your microphone; OpenAI realtime transcription feeds the agents.
 - **👥 Teams meeting:** a self-hosted Attendee bot joins a Microsoft Teams call and its webhooks give speaker-labelled
   utterances for everyone in it. Setup: [TEAMS.md](TEAMS.md).
-- **Replay:** plays back a recorded run from `runs/` with no API calls (demo fallback).
-  `http://localhost:8010/?replay=latest` autoplays the newest complete run (`?replay=<file>.json` for a specific one).
 
 ## Rooms
 
 Every visitor gets their own board: the page adds a random `?room=<id>` to its URL (the room button next to the status
 copies the link). Whoever opens the same link sees the same board live and can control it (Start, Reset, approvals).
-`?replay=latest` and `?room=` combine. Without a room (scripts, `curl /api/control`) the server uses the `default`
+Without a room (scripts, `curl /api/control`) the server uses the `default`
 room. At most `LW_MAX_ROOMS` rooms (20) are open at once; a room with no one connected and nothing running is dropped
 after 30 minutes (after 1 minute if nothing was ever started in it), and its link then opens an empty board.
 
@@ -27,7 +25,7 @@ The server still supports scripted meetings (`data/meeting_*.json`) for `scripts
 2. Talk in short thoughts with small pauses. Interim text appears while you speak and goes to the agents in pieces
    while you talk: at a sentence end, every 6 words (`LW_MIC_CHUNK_WORDS`), or after a 0.8 s pause (`LW_MIC_PAUSE_S`). "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
 3. **■ Stop** flushes the last utterance, runs the final cleanup and analysis, writes the meeting summary and saves the
-   run for Replay.
+   run to `runs/`.
 
 The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` and the server talks to OpenAI.
 `gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits a segment
@@ -45,13 +43,16 @@ multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to ano
 
 ## Controls
 
-- Mode toggle, Start, Pause/Resume (space), speed 1×/2×/4× (replay), Reset, run picker, board tabs.
+- Mode toggle (Talk live / Teams meeting), Start, Reset, Feedback, board tabs.
 - **✨ Tidy** re-lays out the board, **⤢ Fit** fits it to the panel; drag/scroll to pan and zoom. Hover a node for its
   note, status and who changed it.
 - **⚡ Autopilot / ✋ Ask first:** whether the agents may remove nodes on their own or must ask first
   (see [ARCHITECTURE.md](ARCHITECTURE.md#approval-modes)).
 - **Export:** PNG of the current board, JSON or Mermaid of all boards, an AI-generated short spec, and the meeting
   summary once the meeting has ended.
+- **Feedback:** opens a short anonymous form (a Microsoft Form that doesn't record names) for feedback and feature
+  requests. After a meeting ends a small callout points at it ("How was it?"), once; nothing blocks the board. `LW_FEEDBACK_URL` sets another
+  form, empty hides the button.
 
 ## Development
 

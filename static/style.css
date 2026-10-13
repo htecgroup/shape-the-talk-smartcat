@@ -76,7 +76,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   mix-blend-mode: multiply;
 }
 .controls { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
-.controls .btn, .controls .seg button, .controls .run-select { font-size: 14px; }   /* one size across the header controls */
+.controls .btn, .controls .seg button { font-size: 14px; }   /* one size across the header controls */
 .status { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .btn.room { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; gap: 5px; }   /* this board's room id; copies its link */
 
@@ -100,7 +100,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .seg button:hover:not(.on):not(:disabled) { background: var(--hover); }
 .seg button.on { background: var(--orange); color: var(--navy); box-shadow: 0 1px 3px rgba(180, 83, 10, .3); }
 .seg.tiny button { padding: 3px 10px; font-size: 12px; }
-.run-select { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12.5px; max-width: 230px; background: #fff; color: var(--ink); }
 
 .pill {
   display: inline-flex; align-items: center; gap: 7px;
@@ -114,6 +113,32 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .pill.paused { background: #fff3bf; color: #946200; }
 .pill.finished { background: #ebfbee; color: #2b8a3e; }
 @keyframes blink { 50% { opacity: .25; } }
+/* Feedback: a purple tint (the logo's second colour) so it is easy to find without competing with the actions.
+   After a meeting a callout points at it ("How was it?") and a small dot pulses, until it is used or dismissed */
+.feedback-wrap { position: relative; display: inline-flex; }
+#btnFeedback { position: relative; background: var(--purple-soft); color: var(--purple-ink); border-color: #d9d4fc; }
+#btnFeedback:hover { background: #e3dffd; border-color: #c9c2fb; }
+.callout {
+  position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%); z-index: 30; width: 272px;
+  padding: 14px 16px; border: 1px solid #ffd6ad; border-radius: 14px; background: #fff;
+  box-shadow: 0 10px 30px rgba(14, 19, 80, .16); font-size: 13px; color: var(--ink-2); animation: callout-in .25s ease-out;
+}
+.callout::before {   /* the arrow up to the button */
+  content: ""; position: absolute; top: -7px; left: 50%; width: 12px; height: 12px; background: #fff;
+  border-left: 1px solid #ffd6ad; border-top: 1px solid #ffd6ad; transform: translateX(-50%) rotate(45deg);
+}
+.callout-title { margin-bottom: 4px; font-family: var(--display); font-weight: 700; font-size: 15px; color: var(--ink); }
+.callout p { margin: 0 0 12px; line-height: 1.45; }
+.callout .btn { font-size: 13px; }
+.callout-x { position: absolute; top: 8px; right: 8px; display: flex; padding: 4px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.callout-x:hover { background: var(--hover); color: var(--ink); }
+.callout-x .i { margin: 0; width: 14px; height: 14px; }
+@keyframes callout-in { from { opacity: 0; transform: translate(-50%, -4px); } }
+#btnFeedback.nudge::after {
+  content: ""; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--orange); animation: nudge 1.6s ease-out 3;
+}
+@keyframes nudge { from { box-shadow: 0 0 0 0 rgba(245, 132, 31, .55); } 70%, to { box-shadow: 0 0 0 8px rgba(245, 132, 31, 0); } }
 
 .progress { height: 3px; background: var(--line-2); }
 #progressBar { height: 100%; width: 0; background: linear-gradient(90deg, var(--orange), var(--purple)); transition: width .6s ease; }
@@ -151,7 +176,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 16px 8px; }
 .panel-head.small { padding: 10px 14px 6px; }
 .panel-head .head-right { display: inline-flex; align-items: baseline; gap: 8px; }
-.meeting.focus .mic-fields, .meeting.focus .mic-hint, .meeting.focus .participants { display: none; }
+/* focus hides the setup only during a meeting: before one, the link and name fields are how you start it */
+.meeting.focus.in-meeting .mic-fields, .meeting.focus.in-meeting .mic-hint, .meeting.focus .participants { display: none; }
 .meeting.focus .transcript { font-size: 1.08em; }
 .panel-head h2 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
 .panel-head h3 .i { color: var(--purple-ink); }
@@ -192,6 +218,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields input { font: inherit; font-size: 13px; font-weight: 400; padding: 6px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
 .mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
 .mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
+.field { position: relative; display: flex; }
+.field input { flex: 1; min-width: 0; padding-right: 30px; }
+.field-clear { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: flex; padding: 3px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.field-clear:hover { background: var(--hover); color: var(--ink); }
+.field-clear .i { margin: 0; width: 14px; height: 14px; }
 .mic-row { display: flex; align-items: center; gap: 10px; }
 #teamsBox .mic-row .rec { white-space: normal; min-width: 0; }   /* long bot states wrap instead of pushing Join out */
 #btnTeamsJoin { margin-left: auto; white-space: nowrap; flex: none; }
