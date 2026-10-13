@@ -29,6 +29,10 @@ free to run for yourself, not to resell as a hosted service) and posts webhooks 
    the bot leave and runs the usual end-of-meeting cleanup and saves the run; if the meeting ends or someone removes
    the bot, that happens by itself.
 
+Once it is in the meeting, the bot introduces itself in the meeting chat ("Hi everyone, I'm Whiteboard, an AI bot
+that listens to this meeting..."), so nobody wonders who is listening. `LW_ATTENDEE_INTRO=0` turns that off, and
+`LW_ATTENDEE_INTRO_TEXT` sets your own text (`{bot_name}` is replaced by the bot's name).
+
 ## Speakers and transcription
 
 Speakers keep their Teams names and colours and are added to the legend as they join or speak. The Teams web client

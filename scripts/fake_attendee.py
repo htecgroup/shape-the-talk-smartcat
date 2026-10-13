@@ -1,6 +1,7 @@
 """A fake Attendee server: try Teams mode end to end on localhost, with no Teams and no real Attendee.
 
-It answers the two calls the app makes (POST /api/v1/bots, POST /api/v1/bots/{id}/leave) and then plays
+It answers the calls the app makes (POST /api/v1/bots, .../{id}/leave, .../{id}/send_chat_message, which prints the
+bot's chat message) and then plays
 data/meeting_freshbite.json back to the app's webhook URL, signed like Attendee signs them: bot.state_change
 (joining, waiting room, joined), participant joins, one transcript.update per utterance, and at the end the
 bot leaving. Leaving early (Stop in the UI) ends the replay. Extras: --shuffle sends neighbouring utterances
@@ -161,6 +162,14 @@ async def leave_bot(bot_id: str) -> dict:
     await state(bot, "post_processing", "bot_left_meeting")
     await state(bot, "ended", "post_processing_completed")
     return {"id": bot_id, "state": "leaving"}
+
+
+@app.post("/api/v1/bots/{bot_id}/send_chat_message")
+async def send_chat_message(bot_id: str, request: Request) -> dict:
+    if bot_id not in bots:
+        raise HTTPException(404, "no such bot")
+    print(f"chat from {bots[bot_id]['name']}: {(await request.json()).get('message')}")
+    return {}
 
 
 def main() -> None:

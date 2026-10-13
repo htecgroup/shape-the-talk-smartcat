@@ -24,6 +24,9 @@ transcript.update is one utterance, as before.
 Retried webhooks are deduplicated on `idempotency_key`. Transcripts go to the pipeline as soon as they arrive:
 Teams captions come in spoken order (measured ~0.15 s after Teams finalizes them), so holding them back for
 reordering would only add delay.
+
+When the bot is first in the meeting it posts a short intro in the meeting chat (LW_ATTENDEE_INTRO=0 turns it off,
+LW_ATTENDEE_INTRO_TEXT changes it), so everyone knows a bot listens and why.
 """
 
 from __future__ import annotations
@@ -59,6 +62,10 @@ BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Whiteboard"
 TRANSCRIPTION = os.getenv("LW_ATTENDEE_TRANSCRIPTION", "captions").strip().lower()   # captions | openai
 TEAMS_LANGUAGE = os.getenv("ATTENDEE_TEAMS_LANGUAGE", "").strip()                    # captions language, e.g. en-us
 TEAMS_LOGIN = os.getenv("ATTENDEE_TEAMS_LOGIN", "0").strip() == "1"
+DEFAULT_INTRO = ("Hi everyone, I'm {bot_name}, an AI bot that listens to this meeting and helps you visualize and "
+                 "track the most important things in it.")
+INTRO = os.getenv("LW_ATTENDEE_INTRO", "1").strip() == "1"                           # chat message when the bot joins
+INTRO_TEXT = os.getenv("LW_ATTENDEE_INTRO_TEXT", "").strip() or DEFAULT_INTRO        # {bot_name} = the bot's name
 
 WEBHOOK_PATH = "/api/attendee/webhook"
 TRIGGERS = ["transcript.update", "transcript.partial", "participant_events.join_leave", "bot.state_change"]
@@ -200,6 +207,7 @@ class AttendeeSource:
         self.legacy: set[tuple] = set()              # transcript.update handled without the stream: ignore its partials
         self.stopping = False
         self.client: httpx2.AsyncClient | None = None
+        self.intro: asyncio.Task | None = None       # the intro chat message, sent once when the bot is first in the meeting
 
     # ---------------------------------------------------------------- source API
     async def run(self, session: "Session") -> None:
@@ -313,6 +321,16 @@ class AttendeeSource:
         log.info("bot %s created for %s", self.bot_id, self.meeting_url)
         await self._set_state(BOT_STATES.get(data.get("state", "joining"), "joining"))
 
+    async def _send_intro(self) -> None:
+        """Tell the meeting in the chat who the bot is and why it listens. A failure is only logged."""
+        text = INTRO_TEXT.replace("{bot_name}", self.bot_name)
+        try:
+            res = await self._http().post(f"/api/v1/bots/{self.bot_id}/send_chat_message", json={"message": text})
+            if res.status_code >= 400:
+                log.warning("intro message failed (%s): %s", res.status_code, res.text[:200])
+        except Exception as exc:
+            log.warning("intro message failed: %s", exc)
+
     async def _leave(self) -> None:
         try:
             res = await self._http().post(f"/api/v1/bots/{self.bot_id}/leave")
@@ -354,6 +372,8 @@ class AttendeeSource:
             self.done.set()
         elif new in BOT_STATES:
             await self._set_state(BOT_STATES[new])
+            if INTRO and self.state == "in_meeting" and self.intro is None and not self.stopping:
+                self.intro = asyncio.create_task(self._send_intro())   # in the background: webhooks stay cheap
 
     async def _on_transcript(self, data: dict) -> None:
         text = ((data.get("transcription") or {}).get("transcript") or "").strip()

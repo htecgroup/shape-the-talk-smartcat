@@ -48,6 +48,7 @@ def teams(fake_pipeline, monkeypatch):
     monkeypatch.setattr(attendee, "API_KEY", "key")
     monkeypatch.setattr(attendee, "WEBHOOK_SECRET", SECRET)
     monkeypatch.setattr(attendee, "PUBLIC_URL", "https://wb.example.com")
+    monkeypatch.setattr(attendee, "INTRO", False)       # the intro tests turn it on
     http = FakeHttp()
     monkeypatch.setattr(AttendeeSource, "_http", lambda self: http)
     fake_pipeline["http"] = http
@@ -304,6 +305,69 @@ def test_pause_and_resume_listening(teams):
         assert src.state == "in_meeting"
         await src.handle_webhook(state("joined_recording_paused", "s2"))     # paused from elsewhere shows too
         assert src.state == "paused"
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_bot_introduces_itself_in_the_chat_once(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "INTRO", True)
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("waiting_room", "s1"))
+        await asyncio.sleep(0.05)
+        assert not [c for c in teams["http"].calls if c[0] == intro]      # not from the lobby
+        await src.handle_webhook(state("joined_recording", "s2"))
+        await wait_for(lambda: any(c[0] == intro for c in teams["http"].calls))
+        await src.handle_webhook(state("joined_recording_paused", "s3"))
+        await src.handle_webhook(state("joined_recording", "s4"))         # resumed: no second intro
+        await asyncio.sleep(0.05)
+        sent = [body for url, body in teams["http"].calls if url == intro]
+        assert sent == [{"message": attendee.DEFAULT_INTRO.replace("{bot_name}", src.bot_name)}]
+        await src.close()
+
+    asyncio.run(run())
+
+
+def test_intro_can_be_turned_off_or_changed(teams, monkeypatch):
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def joined(s, key):
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", key))
+        await asyncio.sleep(0.05)
+        await src.close()
+        return [body for url, body in teams["http"].calls if url == intro]
+
+    assert asyncio.run(joined(Session(), "s1")) == []                     # LW_ATTENDEE_INTRO=0
+    monkeypatch.setattr(attendee, "INTRO", True)
+    monkeypatch.setattr(attendee, "INTRO_TEXT", "{bot_name} is here to draw.")
+    assert asyncio.run(joined(Session(), "s2")) == [{"message": f"{attendee.BOT_NAME} is here to draw."}]
+
+
+def test_failed_intro_does_not_stop_the_meeting(teams, monkeypatch):
+    monkeypatch.setattr(attendee, "INTRO", True)
+
+    class NoChat(FakeHttp):
+        async def post(self, url, json=None):
+            self.calls.append((url, json))
+            if url.endswith("/send_chat_message"):
+                raise RuntimeError("Attendee is down")
+            return FakeResponse({"id": BOT, "state": "joining"})
+
+    teams["http"].__class__ = NoChat
+
+    async def run():
+        s = Session()
+        src = await start_teams(s)
+        await src.handle_webhook(state("joined_recording", "s1"))
+        await wait_for(lambda: src.intro is not None and src.intro.done())
+        await src.handle_webhook(transcript("Maja", "The customer opens the app.", 1000, "t1"))
+        await wait_for(lambda: s.spoken)
+        assert src.state == "in_meeting" and src.error is None
         await src.close()
 
     asyncio.run(run())
