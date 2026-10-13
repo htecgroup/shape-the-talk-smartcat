@@ -12,7 +12,7 @@
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false, autoReplay: params.get("replay"),
-    source: "scripted",                       // what the current meeting is: scripted | mic | teams
+    source: "idle",                           // what the current meeting is: idle (none yet) | scripted | mic | teams
     meetingTitle: "",  // the server's title, used in export filenames
     mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
     approvalMode: "auto", approvals: [],      // auto: agents edit freely | ask: removals wait for an OK
@@ -108,9 +108,7 @@
     if (!m) return;
     S.meetingTitle = m.title;
     S.source = m.source || "scripted";
-    if (S.source !== "idle")   // before a meeting (and after Reset) the line keeps describing the chosen mode
-      $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime"
-        : S.source === "teams" ? "Teams meeting · Attendee bot" : "simulated · no audio";
+    renderTranscriptSub();
     S.total = m.total || 0;
     S.participants = m.participants;
     for (const p of m.participants) S.colors[p.name] = p.color;
@@ -127,6 +125,13 @@
   // The server's meeting only changes when one starts, so before that the mode toggle can point
   // at a different kind of meeting (e.g. Talk live while the FreshBite one is loaded). Until it
   // starts, hide the other meeting's participants.
+  // where the transcript comes from; before a meeting (and after Reset) it describes the chosen mode
+  function renderTranscriptSub() {
+    const kind = S.source === "idle" ? S.mode : S.source;
+    $("transcriptSub").textContent = { mic: "live microphone · OpenAI realtime", teams: "Teams meeting · Attendee bot",
+                                       replay: "recorded meeting" }[kind] || "simulated · no audio";
+  }
+
   function renderMeetingHead() {
     const started = S.status === "running" || S.status === "paused";
     const matches = started || (S.mode === "replay" ? S.serverMode === "replay" : (S.mode === "mic") === (S.source === "mic"));
@@ -491,6 +496,7 @@
   function setMode(mode, fromServer) {
     S.mode = mode;
     renderMeetingHead();
+    renderTranscriptSub();
     document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
     $("runSelect").hidden = mode !== "replay";
     setLabel($("btnStart"), "play", mode === "replay" ? "Play recording" : "Start meeting");
@@ -535,6 +541,7 @@
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
     $("teamsUrl").disabled = $("teamsRoom").disabled = running;
+    syncUrlClear();
     // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
     $("teamsFields").hidden = $("botHint").hidden = running;
     $("btnTeamsPause").hidden = !running || (st !== "in_meeting" && st !== "paused");
@@ -547,6 +554,10 @@
     }
     btn.disabled = st === "leaving";
     setLabel(btn, "stop", "Stop");
+  }
+
+  function syncUrlClear() {
+    $("teamsUrlClear").hidden = !$("teamsUrl").value || $("teamsUrl").disabled;
   }
 
   function teamsClick() {
@@ -659,6 +670,20 @@
   $("micName").value = store.get("lw.micName") || "";
   $("micTopic").value = store.get("lw.micTopic") || "";
   $("teamsUrl").value = store.get("lw.teamsUrl") || "";
+  syncUrlClear();
+  // the remembered link is selected when you click into it, so a pasted link replaces it; a second click edits
+  $("teamsUrl").addEventListener("mousedown", (e) => {
+    if (document.activeElement === e.target || !e.target.value) return;
+    e.preventDefault(); e.target.focus();
+  });
+  $("teamsUrl").addEventListener("focus", (e) => e.target.select());
+  $("teamsUrl").addEventListener("input", syncUrlClear);
+  $("teamsUrlClear").addEventListener("click", () => {
+    $("teamsUrl").value = "";
+    store.set("lw.teamsUrl", "");   // a reload starts empty too
+    syncUrlClear();
+    $("teamsUrl").focus();
+  });
   $("btnTeamsJoin").addEventListener("click", teamsClick);
   $("btnTeamsPause").addEventListener("click", () => send({ cmd: "listen", on: S.bot.state === "paused" }));
   $("teamsUrl").addEventListener("keydown", (e) => {
@@ -667,7 +692,6 @@
   $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
   $("btnReset").addEventListener("click", () => {
     if (S.utts.size > 0 && S.mode !== "replay" && !confirm("Clear the whiteboard and transcript and start fresh?")) return;
-    $("teamsRoom").value = "";
     send({ cmd: "reset" });
   });
   function toggleMute() {
