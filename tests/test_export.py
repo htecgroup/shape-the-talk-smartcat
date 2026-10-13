@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import server  # noqa: E402
-from whiteboard import agents, export, session as session_mod  # noqa: E402
+from whiteboard import agents, export  # noqa: E402
 from whiteboard.agents import CallResult  # noqa: E402
 from whiteboard.board import BoardState  # noqa: E402
 from whiteboard.session import Session  # noqa: E402
@@ -168,8 +168,8 @@ def test_summary_prompt_formats_and_uses_long_timeout(monkeypatch):
 # ---------------------------------------------------------------- routes
 @pytest.fixture
 def sess(monkeypatch):
-    monkeypatch.setattr(session_mod, "load_meeting", lambda: MEETING)
     s = Session()
+    s.meeting = MEETING
     s.view_board = board_state().to_dict()
     s.view_transcript = [dict(u) for u in TRANSCRIPT]
     s.questions = [{"question": "Which bank?"}]

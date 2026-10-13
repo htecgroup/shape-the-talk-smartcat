@@ -255,6 +255,24 @@ def test_bot_state_is_shown_and_ended_bot_ends_the_meeting(teams):
     assert [p["name"] for p in saved["meeting"]["participants"]] == ["Maja"]
 
 
+def test_reset_leaves_nothing_of_the_meeting_before(teams):
+    async def run():
+        s = Session()
+        assert s.snapshot()["meeting"]["participants"] == []                  # no demo people before a meeting
+        src = await start_teams(s)
+        await src.handle_webhook(hook("participant_events.join_leave", {"event_type": "join", "participant_name": "Maja"}, "j1"))
+        await src.handle_webhook(transcript("Maja", "The customer opens the app.", 1000, "t1"))
+        await wait_for(lambda: s.spoken)
+        await s.reset()
+        snap = s.snapshot()
+        assert snap["status"] == "idle" and snap["bot"]["state"] == "idle"
+        assert snap["meeting"]["participants"] == [] and snap["meeting"]["title"] == ""
+        assert snap["transcript"] == [] and snap["board"]["boards"] == s.board.to_dict()["boards"]
+        assert teams["http"].calls[-1][0] == f"/api/v1/bots/{BOT}/leave"     # the bot was sent away
+
+    asyncio.run(run())
+
+
 def test_fatal_error_is_reported(teams):
     async def run():
         s = Session()

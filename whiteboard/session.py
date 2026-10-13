@@ -37,6 +37,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 
 
+def idle_meeting() -> dict:
+    """The meeting before one starts and after Reset: nobody in it, so nothing of an earlier meeting shows."""
+    return {"id": None, "source": "idle", "title": "", "participants": [], "utterances": []}
+
+
 def load_meeting(path: Path | None = None) -> dict:
     """The scripted meeting: `path`, else LW_MEETING (a file, or a name like "standup" for data/meeting_standup.json),
     else the first data/meeting_*.json."""
@@ -79,7 +84,6 @@ class Clock:
 class Session(AgentPipeline, ApprovalGate):
     def __init__(self) -> None:
         self.clients: set[Any] = set()
-        self.meeting = load_meeting()
         self.approval_mode = DEFAULT_APPROVAL_MODE   # a room setting: survives Reset
         self._tasks: list[asyncio.Task] = []
         self._reset_state()
@@ -88,6 +92,7 @@ class Session(AgentPipeline, ApprovalGate):
     def _reset_state(self) -> None:
         self.mode = "idle"          # idle | live (scripted meeting) | mic (talk live) | teams (Attendee bot) | replay
         self.status = "idle"        # idle | running | paused | finished
+        self.meeting = idle_meeting()   # start() sets the real one
         self.clock = Clock()
         self.board = BoardState()
         self.spoken: list[dict] = []

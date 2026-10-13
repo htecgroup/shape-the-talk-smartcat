@@ -108,8 +108,9 @@
     if (!m) return;
     S.meetingTitle = m.title;
     S.source = m.source || "scripted";
-    $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime"
-      : S.source === "teams" ? "Teams meeting · Attendee bot" : "simulated · no audio";
+    if (S.source !== "idle")   // before a meeting (and after Reset) the line keeps describing the chosen mode
+      $("transcriptSub").textContent = S.source === "mic" ? "live microphone · OpenAI realtime"
+        : S.source === "teams" ? "Teams meeting · Attendee bot" : "simulated · no audio";
     S.total = m.total || 0;
     S.participants = m.participants;
     for (const p of m.participants) S.colors[p.name] = p.color;
@@ -552,8 +553,7 @@
     if (S.status === "running") { send({ cmd: "stop" }); return; }
     const url = $("teamsUrl").value.trim();
     const room = $("teamsRoom").value.trim();
-    store.set("lw.teamsUrl", url);
-    store.set("lw.teamsRoom", room);
+    store.set("lw.teamsUrl", url);   // the room is not remembered: a stale one would make the bot wait for it
     send({ cmd: "start", mode: "teams", meeting_url: url, breakout_room: room || null });   // no topic: the agents infer it from the talk
   }
 
@@ -659,7 +659,6 @@
   $("micName").value = store.get("lw.micName") || "";
   $("micTopic").value = store.get("lw.micTopic") || "";
   $("teamsUrl").value = store.get("lw.teamsUrl") || "";
-  $("teamsRoom").value = store.get("lw.teamsRoom") || "";
   $("btnTeamsJoin").addEventListener("click", teamsClick);
   $("btnTeamsPause").addEventListener("click", () => send({ cmd: "listen", on: S.bot.state === "paused" }));
   $("teamsUrl").addEventListener("keydown", (e) => {
@@ -668,6 +667,7 @@
   $("btnPause").addEventListener("click", () => send({ cmd: S.status === "paused" ? "resume" : "pause" }));
   $("btnReset").addEventListener("click", () => {
     if (S.utts.size > 0 && S.mode !== "replay" && !confirm("Clear the whiteboard and transcript and start fresh?")) return;
+    $("teamsRoom").value = "";
     send({ cmd: "reset" });
   });
   function toggleMute() {
