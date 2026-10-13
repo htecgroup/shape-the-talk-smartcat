@@ -472,6 +472,7 @@
     const pill = $("statusPill");
     pill.className = "pill";
     const running = status === "running" || status === "paused";
+    document.querySelector(".panel.meeting").classList.toggle("in-meeting", running);
     let txt = "Idle";
     if (status === "running") {
       pill.classList.add(S.mode === "replay" ? "replay" : "live");
@@ -700,7 +701,8 @@
     updateMicUI();
   }
   $("btnMute").addEventListener("click", toggleMute);
-  // Focus: hide setup fields, hint and participants so the transcript gets the space (remembered per browser)
+  // Focus: hide participants, and during a meeting the setup fields and hint, so the transcript gets the space
+  // (remembered per browser)
   function setFocus(on) {
     document.querySelector(".panel.meeting").classList.toggle("focus", on);
     setLabel($("btnFocus"), on ? "download" : "focus", on ? "Show details" : "Focus");

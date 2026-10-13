@@ -150,7 +150,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 16px 8px; }
 .panel-head.small { padding: 10px 14px 6px; }
 .panel-head .head-right { display: inline-flex; align-items: baseline; gap: 8px; }
-.meeting.focus .mic-fields, .meeting.focus .mic-hint, .meeting.focus .participants { display: none; }
+/* focus hides the setup only during a meeting: before one, the link and name fields are how you start it */
+.meeting.focus.in-meeting .mic-fields, .meeting.focus.in-meeting .mic-hint, .meeting.focus .participants { display: none; }
 .meeting.focus .transcript { font-size: 1.08em; }
 .panel-head h2 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
 .panel-head h3 .i { color: var(--purple-ink); }
