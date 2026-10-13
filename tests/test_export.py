@@ -174,8 +174,7 @@ def sess(monkeypatch):
     s.view_transcript = [dict(u) for u in TRANSCRIPT]
     s.questions = [{"question": "Which bank?"}]
     s.disagreements = []
-    monkeypatch.setattr(server, "session", s)
-    monkeypatch.setattr(server, "spec_running", False)
+    monkeypatch.setattr(server, "rooms", {server.DEFAULT_ROOM: s})
     return s
 
 
@@ -209,7 +208,7 @@ def test_export_spec_route_passes_meaningful_transcript_and_all_boards(sess, mon
     assert [u["id"] for u in seen["transcript"]] == ["u1", "u3"]          # no chit-chat, no unfinished utterance
     assert [b["id"] for b in seen["boards"]["boards"]] == ["flow"]
     assert seen["questions"] == [{"question": "Which bank?"}]
-    assert server.spec_running is False
+    assert sess.spec_running is False
 
 
 def test_export_spec_route_errors(sess, monkeypatch):
@@ -219,13 +218,13 @@ def test_export_spec_route_errors(sess, monkeypatch):
     monkeypatch.setattr(agents, "generate_spec", failing_spec)
     r = asyncio.run(server.export_spec())
     assert r.status_code == 502 and "APITimeoutError" in json.loads(r.body)["error"]
-    assert server.spec_running is False                                  # guard released after a failure
+    assert sess.spec_running is False                                  # guard released after a failure
 
-    monkeypatch.setattr(server, "spec_running", True)
+    sess.spec_running = True
     r = asyncio.run(server.export_spec())
     assert r.status_code == 409 and json.loads(r.body)["ok"] is False
 
-    monkeypatch.setattr(server, "spec_running", False)
+    sess.spec_running = False
     sess.view_board = BoardState().to_dict()
     r = asyncio.run(server.export_spec())
     assert r.status_code == 400 and "empty" in json.loads(r.body)["error"]

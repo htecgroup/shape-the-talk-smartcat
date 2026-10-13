@@ -1,7 +1,7 @@
 /* Talk-live microphone: getUserMedia -> AudioWorklet (PCM16 24 kHz) -> /ws/mic.
  * The OpenAI key never reaches the browser; the server proxies the audio to OpenAI.
  *
- * Mic.start({speaker, topic, resume}, {onState, onLevel, onError}) -> Promise<boolean>
+ * Mic.start({speaker, topic, resume, room}, {onState, onLevel, onError}) -> Promise<boolean>
  * Mic.stop()   asks the server to flush the last utterance; capture stops immediately.
  * Mic.setMuted(on)  silences the track: silence keeps streaming, so the server's VAD closes the
  *                   current utterance and the upstream session stays alive. No reconnect on unmute.
@@ -40,7 +40,7 @@ const Mic = (() => {
     } catch (e) { release(); h.onError?.(`Audio setup failed: ${e.message || e}`); return false; }
 
     active = true;
-    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/mic`);
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/mic?room=${encodeURIComponent(opts.room || "")}`);
     ws.binaryType = "arraybuffer";
     const sock = ws;
     sock.onopen = () => sock.send(JSON.stringify({ type: "start", speaker: opts.speaker, topic: opts.topic, resume: !!opts.resume }));

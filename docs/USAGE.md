@@ -10,20 +10,38 @@ Setup is in the [README](../README.md#run-it). This page covers the modes, the c
 - **Replay:** plays back a recorded run from `runs/` with no API calls (demo fallback).
   `http://localhost:8010/?replay=latest` autoplays the newest complete run (`?replay=<file>.json` for a specific one).
 
+## Rooms
+
+Every visitor gets their own board: the page adds a random `?room=<id>` to its URL (the room button next to the status
+copies the link). Whoever opens the same link sees the same board live and can control it (Start, Reset, approvals).
+`?replay=latest` and `?room=` combine. Without a room (scripts, `curl /api/control`) the server uses the `default`
+room. At most `LW_MAX_ROOMS` rooms (20) are open at once; a room with no one connected and nothing running is dropped
+after 30 minutes (after 1 minute if nothing was ever started in it), and its link then opens an empty board.
+
 The server still supports scripted meetings (`data/meeting_*.json`) for `scripts/simulate.py`.
 
 ## Talk live
 
 1. Click **🎙 Talk live**, optionally enter your name and what you're designing, then **🎙 Start talking** (the mic needs
    `localhost` or https).
-2. Talk in short thoughts with small pauses. Interim text appears while you speak; an utterance is final about 1.3 s
-   after you pause. "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
+2. Talk in short thoughts with small pauses. Interim text appears while you speak and goes to the agents in pieces
+   while you talk: at a sentence end, every 6 words (`LW_MIC_CHUNK_WORDS`), or after a 0.8 s pause (`LW_MIC_PAUSE_S`). "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
 3. **■ Stop** flushes the last utterance, runs the final cleanup and analysis, writes the meeting summary and saves the
    run for Replay.
 
 The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` and the server talks to OpenAI.
-`gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits an utterance
-after 700 ms of quiet.
+`gpt-live-transcribe` doesn't support server-side turn detection, so the server's own energy VAD commits a segment
+after 700 ms of quiet; its final transcript sends only what is left and fixes the earlier pieces on screen. Server-VAD
+models stream no text mid-speech, so their segments go out whole.
+
+## Custom vocabulary
+
+Speech-to-text (Teams captions especially, which take no custom vocabulary) mishears product names: "Geoff classifier"
+for JEV classifier, "cloud code" for Claude Code. `data/vocabulary.json` maps each correct spelling to its misheard
+variants (case-insensitive, whole words). The server fixes them in the transcript before the viewers and the agents see
+it, for every mode, and lists the terms as KNOWN TERMS in the modeller, consolidator and extractor prompts, so the board
+is spelled right even when a variant slips through (e.g. split over two Teams chunks). Keep variants of real words
+multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to another file; read at server start.
 
 ## Controls
 

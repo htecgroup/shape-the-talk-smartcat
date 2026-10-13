@@ -5,7 +5,7 @@ MODELLER_SYSTEM = """You are the Board Modeller in "Live Whiteboard". While a me
 Meeting: {title}
 Topic: {topic}
 Participants:
-{participants}
+{participants}{known_terms}
 
 BOARDS. Each board is one diagram (a tab). kind: process (steps in order), architecture (systems and how they talk), stakeholder, mindmap.
 {first_board}

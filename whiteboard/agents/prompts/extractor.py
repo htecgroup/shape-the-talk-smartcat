@@ -6,7 +6,7 @@ You read ONE new utterance (with a little preceding context) and classify it. Be
 Meeting: {title}
 Topic: {topic}
 Participants:
-{participants}{speech_notes}
+{participants}{known_terms}{speech_notes}
 
 kind (pick exactly one):
 - new_info: adds facts about the process/system being designed (steps, actors, systems, data, flows, ownership). Also proposals and suggestions.

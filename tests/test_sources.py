@@ -290,3 +290,160 @@ def test_scripted_source_uses_same_pipeline(fake_pipeline, monkeypatch):
         assert "mic" not in json.loads((recording.RUNS_DIR / s.run_file).read_text())["meta"]["latency"]
 
     asyncio.run(run())
+
+
+# ------------------------------------------------- talk live: chunking the running transcript
+def words_of(item, text):
+    """The text streamed as one delta per word, like the live model sends it."""
+    parts = text.split(" ")
+    return [delta(item, (" " if i else "") + w) for i, w in enumerate(parts)]
+
+
+def spoken_texts(s):
+    return [u["text"] for u in s.spoken]
+
+
+def test_mic_deltas_go_out_every_chunk_of_words_mid_sentence(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "PAUSE_S", 5)
+    assert sources.CHUNK_WORDS == 6                                     # the default
+
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        for ev in words_of("itA", "so the order goes from the"):
+            await mic.handle_event(ev)
+        assert spoken_texts(s) == []                                    # the 6th word may still be partial
+        await mic.handle_event(delta("itA", " app"))                    # ... a space after it makes it stable
+        assert spoken_texts(s) == ["so the order goes from the"]
+        assert s.view_transcript[-1]["text"] == "app" and not s.view_transcript[-1]["done"]   # the rest, live
+        for ev in words_of("itA", " to the kitchen and then the courier picks"):
+            await mic.handle_event(ev)
+        assert spoken_texts(s) == ["so the order goes from the", "app to the kitchen and then"]
+        await mic.handle_event(completed("itA", "So the order goes from the app to the kitchen and then the courier picks it up."))
+        assert spoken_texts(s)[-1] == "the courier picks it up."
+        assert [u["id"] for u in s.spoken] == ["m001", "m002", "m003"]
+        assert all(u["done"] for u in s.view_transcript)
+        await mic.close()
+
+    asyncio.run(run())
+
+
+def test_mic_cuts_at_a_sentence_end(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "PAUSE_S", 5)
+
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        await mic.handle_event(delta("itA", "The customer pays."))
+        assert spoken_texts(s) == []                                    # the period may still grow ("pays.com")
+        await mic.handle_event(delta("itA", " Then"))
+        assert spoken_texts(s) == ["The customer pays."]
+        await mic.handle_event(delta("itA", " she leaves. "))           # a stable sentence end goes out at once
+        assert spoken_texts(s) == ["The customer pays.", "Then she leaves."]
+        await mic.handle_event(completed("itA", "The customer pays. Then she leaves."))
+        assert len(s.spoken) == 2 and s.view_transcript[-1]["done"]     # nothing left: the live line is dropped
+        assert [u["text"] for u in s.view_transcript] == ["The customer pays.", "Then she leaves."]
+        await mic.close()
+
+    asyncio.run(run())
+
+
+def test_mic_pause_sends_what_was_said_so_far(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "PAUSE_S", 0.1)
+
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        await mic.handle_event(delta("itA", "Today I"))
+        await asyncio.sleep(0.3)
+        assert spoken_texts(s) == []                                    # too short to stand alone: wait for more
+        await mic.handle_event(completed("itA", "Today I start."))
+        for ev in words_of("itB", "The kitchen gets a ticket"):
+            await mic.handle_event(ev)
+        assert spoken_texts(s) == ["Today I start."]
+        await wait_for(lambda: spoken_texts(s) == ["Today I start.", "The kitchen gets a ticket"])
+        await mic.handle_event(delta("itB", " and prints it"))
+        await mic.handle_event(completed("itB", "The kitchen gets a ticket and prints it."))
+        assert spoken_texts(s) == ["Today I start.", "The kitchen gets a ticket", "and prints it."]
+        await asyncio.sleep(0.2)
+        assert len(s.spoken) == 3                                       # completion cancelled the pause timer
+        await mic.close()
+
+    asyncio.run(run())
+
+
+def test_mic_final_transcript_sends_only_the_rest_and_fixes_the_screen(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "PAUSE_S", 5)
+
+    async def run():
+        s = Session()
+        viewer = FakeWS()
+        s.clients.add(viewer)
+        mic = await start_mic(s)
+        await mic.handle_event({"type": "input_audio_buffer.committed", "item_id": "itA"})
+        mic.items["itA"]["speech_end"] = s.t0 + 0.5
+        for ev in words_of("itA", "The costumer pays online with a card and"):
+            await mic.handle_event(ev)
+        assert spoken_texts(s) == ["The costumer pays online with a"]
+        await mic.handle_event(completed("itA", "The customer pays online with a card and then leaves."))
+        assert spoken_texts(s) == ["The costumer pays online with a", "card and then leaves."]   # each word once
+        assert s.view_transcript[0]["text"] == "The customer pays online with a"              # the screen is fixed
+        final = [e for e in viewer.events if e["type"] == "utterance_final"]
+        assert (final[-1]["id"], final[-1]["text"]) == ("m001", "The customer pays online with a")
+        assert "speech_end_t" not in final[0] and final[1]["speech_end_t"] == 0.5 and "stt_ms" in final[1]
+        assert s.utt_timing["m002"]["speech_end_t"] == 0.5 and s.utt_timing["m001"]["speech_end_t"] is None
+        await mic.close()
+
+    asyncio.run(run())
+
+
+def test_mic_later_item_waits_for_the_earlier_one_then_catches_up(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "PAUSE_S", 5)
+
+    async def run():
+        s = Session()
+        viewer = FakeWS()
+        s.clients.add(viewer)
+        mic = await start_mic(s)
+        for ev in words_of("itA", "The customer opens the app and picks"):
+            await mic.handle_event(ev)
+        assert spoken_texts(s) == ["The customer opens the app and"]
+        for ev in words_of("itB", "Then the kitchen gets the ticket and prints"):
+            await mic.handle_event(ev)                                  # B streams before A completes ...
+        assert spoken_texts(s) == ["The customer opens the app and"]   # ... but is neither sent nor shown
+        assert not any("kitchen" in json.dumps(e) for e in viewer.events)
+        await mic.handle_event(completed("itA", "The customer opens the app and picks a dish."))
+        assert spoken_texts(s) == ["The customer opens the app and", "picks a dish.",
+                                   "Then the kitchen gets the ticket"]  # B caught up once A closed
+        assert s.view_transcript[-1]["text"] == "and prints" and not s.view_transcript[-1]["done"]
+        await mic.handle_event(completed("itB", "Then the kitchen gets the ticket and prints it."))
+        assert spoken_texts(s)[-1] == "and prints it."
+        assert [u["id"] for u in s.spoken] == ["m001", "m002", "m003", "m004"]
+
+        await mic.handle_event(delta("itC", "Payment goes through"))
+        await mic.handle_event(delta("itD", "Then the receipt"))
+        await mic.handle_event(completed("itD", "Then the receipt is printed."))   # D completes first ...
+        await mic.handle_event(completed("itC", "Payment goes through Stripe."))
+        assert spoken_texts(s)[-2:] == ["Payment goes through Stripe.", "Then the receipt is printed."]
+        await mic.close()
+
+    asyncio.run(run())
+
+
+def test_mic_server_vad_segment_goes_out_whole(fake_pipeline):
+    async def run():
+        s = Session()
+        viewer = FakeWS()
+        s.clients.add(viewer)
+        mic = await start_mic(s)
+        await mic.handle_event({"type": "input_audio_buffer.speech_started", "item_id": "itA"})
+        assert s.view_transcript[-1] == {**s.view_transcript[-1], "id": "m001", "text": "", "done": False}
+        await mic.handle_event({"type": "input_audio_buffer.speech_started", "item_id": "itB"})
+        assert len(s.view_transcript) == 1                              # B shows once A is done
+        await mic.handle_event(completed("itA", "The customer opens the app and picks a dish from the menu."))
+        await mic.handle_event(completed("itB", "Um."))
+        assert spoken_texts(s) == ["The customer opens the app and picks a dish from the menu."]
+        assert [u["id"] for u in s.view_transcript] == ["m001"]        # B's empty line dropped
+        await mic.close()
+
+    asyncio.run(run())

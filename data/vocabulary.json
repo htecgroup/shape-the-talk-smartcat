@@ -1,0 +1,8 @@
+{
+  "_comment": "Product names speech-to-text mishears. Correct spelling -> misheard variants (case-insensitive, whole words; any whitespace or a hyphen between the words). Each variant is replaced in the transcript before the agents see it, and the list is shown to the modeller, consolidator and extractor as KNOWN TERMS. Only multi-word variants for real words: never map a bare name like 'jeff' or 'java'.",
+  "JEV classifier": ["geoff classifier", "jeff classifier", "jav classifier", "java classifier", "chev classifier",
+                     "jab classifier", "jev classifier"],
+  "JEV": ["jav", "jev"],
+  "Claude Agent SDK": ["cloud agent sdk", "clawed agent sdk", "claude agent sdk"],
+  "Claude Code": ["cloud code", "clawed code", "claude code"]
+}

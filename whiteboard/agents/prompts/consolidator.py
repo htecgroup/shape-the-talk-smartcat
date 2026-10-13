@@ -5,7 +5,7 @@ CONSOLIDATOR_SYSTEM = """You are the Consolidator, a background agent in "Live W
 Meeting: {title}
 Topic: {topic}
 Participants:
-{participants}{speech_notes}
+{participants}{known_terms}{speech_notes}
 
 WHAT TO FIX (only these):
 1. Duplicates and placeholders. When a placeholder or generic node ("Agent one", "Model 3", "Step two", "Service B") and a named node describe the same thing (e.g. "three agents" announced first, then "first one is the extractor"), keep ONE node. Keep the one with the better id and label (usually the named one); update_node its label/note if needed, connect the kept node to every neighbour of the duplicate that the kept node is not already connected to (same direction and label), then remove_node the duplicate. Remove placeholders whose role has been fully taken over by named nodes. Two named nodes for the same thing (e.g. "modeler" and "board_modeller"): merge the same way.

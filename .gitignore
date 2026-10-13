@@ -2,5 +2,5 @@
 .venv/
 __pycache__/
 .pytest_cache/
-runs/*_partial.json
+runs/
 .DS_Store
