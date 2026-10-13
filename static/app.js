@@ -95,6 +95,7 @@
     setStatus(s.status, s.mode, s.speed);
     renderApprovals(s.approvals || []);
     fillRuns(s.runs);
+    setFeedback(s.feedback_url);
     updateProgress();
     if (S.autoReplay && (s.status === "idle" || s.status === "finished")) {
       setMode("replay");
@@ -102,6 +103,27 @@
       S.autoReplay = null;
     }
   }
+
+  // --------------------------------------------------------------- feedback
+  // The button opens the team's anonymous form (LW_FEEDBACK_URL; hidden without one). It never pops up: once a live
+  // meeting has ended it only gets a small pulsing dot, once per page, until it is used.
+  const FEEDBACK_TITLE = "Feedback or a feature request? Opens a short anonymous form (your name isn't recorded)";
+  function setFeedback(url) {
+    S.feedbackUrl = url || null;
+    $("btnFeedback").hidden = !S.feedbackUrl;
+    if (!$("btnFeedback").classList.contains("nudge")) $("btnFeedback").title = FEEDBACK_TITLE;
+  }
+  function nudgeFeedback() {
+    if (S.feedbackNudged || !S.feedbackUrl) return;
+    S.feedbackNudged = true;
+    $("btnFeedback").classList.add("nudge");
+    $("btnFeedback").title = "How did that meeting go? " + FEEDBACK_TITLE;
+  }
+  $("btnFeedback").addEventListener("click", () => {
+    if (S.feedbackUrl) window.open(S.feedbackUrl, "_blank", "noopener");
+    $("btnFeedback").classList.remove("nudge");
+    $("btnFeedback").title = FEEDBACK_TITLE;
+  });
 
   // ---------------------------------------------------------------- meeting
   function setMeeting(m) {
@@ -466,7 +488,9 @@
 
   // --------------------------------------------------------------- controls
   function setStatus(status, mode, speed) {
+    const was = S.status;
     S.status = status; if (mode) S.mode = mode === "idle" ? S.mode : mode;
+    if ((was === "running" || was === "paused") && status === "finished" && S.mode !== "replay") nudgeFeedback();
     if (speed) { S.speed = speed; document.querySelectorAll("#speedSeg button").forEach((b) => b.classList.toggle("on", +b.dataset.speed === +speed)); }
     S.paused = status === "paused";
     const pill = $("statusPill");

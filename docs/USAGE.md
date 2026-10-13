@@ -34,6 +34,9 @@ after 700 ms of quiet.
   (see [ARCHITECTURE.md](ARCHITECTURE.md#approval-modes)).
 - **Export:** PNG of the current board, JSON or Mermaid of all boards, an AI-generated short spec, and the meeting
   summary once the meeting has ended.
+- **Feedback:** opens a short anonymous form (a Microsoft Form that doesn't record names) for feedback and feature
+  requests. It never pops up; after a meeting ends a small dot reminds you once. `LW_FEEDBACK_URL` sets another
+  form, empty hides the button.
 
 ## Development
 
