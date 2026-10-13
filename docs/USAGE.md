@@ -35,7 +35,7 @@ after 700 ms of quiet.
 - **Export:** PNG of the current board, JSON or Mermaid of all boards, an AI-generated short spec, and the meeting
   summary once the meeting has ended.
 - **Feedback:** opens a short anonymous form (a Microsoft Form that doesn't record names) for feedback and feature
-  requests. It never pops up; after a meeting ends it asks "How was it?" with a pulsing dot, once. `LW_FEEDBACK_URL` sets another
+  requests. After a meeting ends a small callout points at it ("How was it?"), once; nothing blocks the board. `LW_FEEDBACK_URL` sets another
   form, empty hides the button.
 
 ## Development

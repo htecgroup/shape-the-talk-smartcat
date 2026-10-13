@@ -105,27 +105,28 @@
   }
 
   // --------------------------------------------------------------- feedback
-  // The button opens the team's anonymous form (LW_FEEDBACK_URL; hidden without one). It never pops up: once a live
-  // meeting has ended (once per page) it turns orange and asks "How was it?" with a pulsing dot, until it is used or
-  // the next meeting starts.
-  const FEEDBACK_TITLE = "Feedback or a feature request? Opens a short anonymous form (your name isn't recorded)";
+  // The button opens the team's anonymous form (LW_FEEDBACK_URL; hidden without one). Nothing pops up over the work:
+  // once a live meeting has ended (once per page) a callout points at the button ("How was it?") and its dot pulses,
+  // until the form is opened, the callout is dismissed, or the next meeting starts.
   function setFeedback(url) {
     S.feedbackUrl = url || null;
     $("btnFeedback").hidden = !S.feedbackUrl;
   }
   function nudgeFeedback(on) {
     if (on && (S.feedbackNudged || !S.feedbackUrl)) return;
-    if (!on && !$("btnFeedback").classList.contains("nudge")) return;
     if (on) S.feedbackNudged = true;
     $("btnFeedback").classList.toggle("nudge", on);
-    setLabel($("btnFeedback"), "message", on ? "How was it?" : "Feedback");
-    $("btnFeedback").title = on ? "How did that meeting go? " + FEEDBACK_TITLE : FEEDBACK_TITLE;
+    $("feedbackCallout").hidden = !on;
   }
-  $("btnFeedback").title = FEEDBACK_TITLE;
-  $("btnFeedback").addEventListener("click", () => {
+  function openFeedback() {
     if (S.feedbackUrl) window.open(S.feedbackUrl, "_blank", "noopener");
     nudgeFeedback(false);
-  });
+  }
+  $("btnFeedback").title = "Feedback or a feature request? Opens a short anonymous form (your name isn't recorded)";
+  $("btnFeedback").addEventListener("click", openFeedback);
+  $("feedbackCalloutGo").addEventListener("click", openFeedback);
+  $("feedbackCalloutClose").addEventListener("click", () => nudgeFeedback(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") nudgeFeedback(false); });
 
   // ---------------------------------------------------------------- meeting
   function setMeeting(m) {

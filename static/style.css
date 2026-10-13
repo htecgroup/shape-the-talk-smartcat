@@ -113,12 +113,27 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .pill.paused { background: #fff3bf; color: #946200; }
 .pill.finished { background: #ebfbee; color: #2b8a3e; }
 @keyframes blink { 50% { opacity: .25; } }
-/* Feedback: a purple tint (the logo's second colour) so it is easy to find without competing with the actions;
-   after a meeting it turns orange, asks "How was it?" and a small dot pulses a few times, until it is used */
+/* Feedback: a purple tint (the logo's second colour) so it is easy to find without competing with the actions.
+   After a meeting a callout points at it ("How was it?") and a small dot pulses, until it is used or dismissed */
+.feedback-wrap { position: relative; display: inline-flex; }
 #btnFeedback { position: relative; background: var(--purple-soft); color: var(--purple-ink); border-color: #d9d4fc; }
 #btnFeedback:hover { background: #e3dffd; border-color: #c9c2fb; }
-#btnFeedback.nudge { background: var(--orange-soft); color: var(--orange-ink); border-color: #ffd6ad; }
-#btnFeedback.nudge:hover { background: #ffe5cc; border-color: #ffc890; }
+.callout {
+  position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%); z-index: 30; width: 272px;
+  padding: 14px 16px; border: 1px solid #ffd6ad; border-radius: 14px; background: #fff;
+  box-shadow: 0 10px 30px rgba(14, 19, 80, .16); font-size: 13px; color: var(--ink-2); animation: callout-in .25s ease-out;
+}
+.callout::before {   /* the arrow up to the button */
+  content: ""; position: absolute; top: -7px; left: 50%; width: 12px; height: 12px; background: #fff;
+  border-left: 1px solid #ffd6ad; border-top: 1px solid #ffd6ad; transform: translateX(-50%) rotate(45deg);
+}
+.callout-title { margin-bottom: 4px; font-family: var(--display); font-weight: 700; font-size: 15px; color: var(--ink); }
+.callout p { margin: 0 0 12px; line-height: 1.45; }
+.callout .btn { font-size: 13px; }
+.callout-x { position: absolute; top: 8px; right: 8px; display: flex; padding: 4px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.callout-x:hover { background: var(--hover); color: var(--ink); }
+.callout-x .i { margin: 0; width: 14px; height: 14px; }
+@keyframes callout-in { from { opacity: 0; transform: translate(-50%, -4px); } }
 #btnFeedback.nudge::after {
   content: ""; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
   background: var(--orange); animation: nudge 1.6s ease-out 3;

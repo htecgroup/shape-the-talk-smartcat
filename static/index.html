@@ -62,7 +62,15 @@
         <button data-speed="4">4×</button>
       </div>
       <button id="btnReset" class="btn ghost"><svg class="i"><use href="#i-reset"/></svg>Reset</button>
-      <button id="btnFeedback" class="btn ghost" hidden><svg class="i"><use href="#i-message"/></svg>Feedback</button>
+      <span class="feedback-wrap">
+        <button id="btnFeedback" class="btn ghost" hidden><svg class="i"><use href="#i-message"/></svg>Feedback</button>
+        <div class="callout" id="feedbackCallout" role="dialog" aria-labelledby="feedbackCalloutTitle" hidden>
+          <button class="callout-x" id="feedbackCalloutClose" title="Dismiss" aria-label="Dismiss"><svg class="i"><use href="#i-x"/></svg></button>
+          <div class="callout-title" id="feedbackCalloutTitle">How was it?</div>
+          <p>Tell us what worked, what didn't, or what you'd like next. It takes a minute and it's anonymous.</p>
+          <button class="btn primary tiny" id="feedbackCalloutGo"><svg class="i"><use href="#i-message"/></svg>Give feedback</button>
+        </div>
+      </span>
     </div>
 
     <div class="status">
