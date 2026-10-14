@@ -22,6 +22,7 @@
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false,
+    listed: 0,                                // questions + disagreements the analyst lists
     source: "idle",                           // what the current meeting is: idle (none yet) | scripted | mic | teams
     meetingTitle: "",  // the server's title, used in export filenames
     mic: { state: "idle", error: null, warning: null, model: null }, micOwner: false,
@@ -409,6 +410,7 @@
     qs = [...qs].sort((a, b) => order[a.status] - order[b.status]);
     ds = [...ds].sort((a, b) => order[a.status] - order[b.status]);
     const nq = qs.filter((q) => q.status !== "answered").length, nd = ds.filter((d) => d.status === "open").length;
+    S.listed = qs.length + ds.length;   // anything for Export -> Open questions
     // while the right panel is collapsed, flash its rail when something new needs attention
     if (isCollapsed("right") && (nq > +$("qCountRail").textContent || nd > +$("dCountRail").textContent)) {
       const rail = $("btnRailRight");
@@ -766,10 +768,12 @@
   function setExportMenu(open) {
     $("exportMenu").hidden = !open;
     $("btnExport").setAttribute("aria-expanded", open);
-    // Only PNG exports the board on screen; the rest cover all boards, and the server reports when all are empty
+    // Only PNG exports the board on screen; the rest cover all boards, and the server reports when all are empty.
+    // The transcript and the questions need something said or asked first.
     const empty = !$("boardEmpty").classList.contains("hide");
     $("exportMenu").querySelectorAll("[data-export]").forEach((b) => {
-      b.disabled = b.dataset.export === "png" && empty;
+      b.disabled = (b.dataset.export === "png" && empty) || (b.dataset.export === "transcript" && !S.utts.size)
+        || (b.dataset.export === "questions" && !S.listed);
     });
     if (spec.busy) $("btnSpec").disabled = true;
     setSummaryItem();
@@ -836,6 +840,10 @@
         BoardExport.download(await fetchExport("/api/export/board.json"), `${meeting}-board.json`);
       } else if (kind === "mermaid") {
         BoardExport.download(await fetchExport("/api/export/board.mmd"), `${meeting}-mermaid.md`);
+      } else if (kind === "transcript") {
+        BoardExport.download(await fetchExport("/api/export/transcript.md"), `${meeting}-transcript.md`);
+      } else if (kind === "questions") {
+        BoardExport.download(await fetchExport("/api/export/questions.md"), `${meeting}-questions.md`);
       } else if (kind === "spec" && !spec.busy) {
         await generateSpec();
       } else if (kind === "summary" && S.summary) {

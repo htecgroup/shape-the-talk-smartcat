@@ -1,4 +1,4 @@
-"""Exports: board JSON, Mermaid, the spec writer and meeting summary prompts, and the /api/export routes (agents faked, no API calls).
+"""Exports: board JSON, Mermaid, transcript and questions Markdown, the spec writer and meeting summary prompts, and the /api/export routes (agents faked, no API calls).
 
 Routes are called as plain async functions on a prepared session (no HTTP client needed)."""
 
@@ -107,6 +107,37 @@ def test_all_mermaid_one_fenced_block_per_board():
     assert md.count("```mermaid") == 2 and md.count("```") == 4
 
 
+# ------------------------------------------------------------- Markdown
+def test_transcript_markdown_joins_a_speakers_pieces_and_skips_unfinished():
+    transcript = TRANSCRIPT[:1] + [{"id": "u1b", "speaker": "Ana", "text": " then the bank answers.", "done": True,
+                                    "kind": "new_info"}] + TRANSCRIPT[1:]
+    md = export.transcript_markdown(MEETING, transcript)
+    assert md == ("# Order Flow: v2: transcript\n\n"
+                  "Participants: Ana, Marko\n\n"
+                  "**Ana:** Checkout pays the bank. then the bank answers.\n\n"
+                  "**Marko:** Can you hear me?\n\n"            # small talk stays: it is the whole transcript
+                  "**Ana:** Maybe we store orders.\n")          # u4 is still being spoken
+
+
+def test_questions_markdown_groups_by_status():
+    questions = [{"question": "Which bank?", "asked_by": "Ana", "src": "u1", "status": "open", "answer": None},
+                 {"question": "Retries?", "asked_by": "Marko", "src": "u2", "status": "parked", "answer": None},
+                 {"question": "Store orders?", "asked_by": "Ana", "src": "u3", "status": "answered",
+                  "answer": "Yes, in Postgres"}]
+    disagreements = [{"topic": "Queue first", "status": "open", "resolution": None, "src": "u2",
+                      "positions": [{"who": "Ana", "position": "yes"}, {"who": "Marko", "position": "no"}]},
+                     {"topic": "Card only", "status": "resolved", "resolution": "Cards and wallets", "src": "u3",
+                      "positions": []}]
+    md = export.questions_markdown(MEETING, questions, disagreements)
+    assert md == ("# Order Flow: v2: open questions\n\n"
+                  "## Open questions\n\n- Which bank? (asked by Ana)\n\n"
+                  "## Parked questions\n\n- Retries? (asked by Marko)\n\n"
+                  "## Answered\n\n- Store orders? (asked by Ana)\n  - Answer: Yes, in Postgres\n\n"
+                  "## Open disagreements\n\n- **Queue first**\n  - Ana: yes\n  - Marko: no\n\n"
+                  "## Resolved disagreements\n\n- **Card only**\n  - Resolved: Cards and wallets\n")
+    assert export.questions_markdown(MEETING, [], []).endswith("No questions or disagreements.\n")
+
+
 def test_slug():
     assert export.slug("Order Flow: v2") == "order-flow-v2"
     assert export.slug("") == export.slug(None) == export.slug("!!!") == "whiteboard"
@@ -191,6 +222,28 @@ def test_export_mermaid_route(sess):
     assert r.headers["content-disposition"] == 'attachment; filename="order-flow-v2-mermaid.md"'
     assert r.media_type == "text/markdown"
     assert "```mermaid\nflowchart LR\n" in r.body.decode()
+
+
+def test_export_transcript_route(sess):
+    r = asyncio.run(server.export_transcript())
+    assert r.headers["content-disposition"] == 'attachment; filename="order-flow-v2-transcript.md"'
+    assert r.media_type == "text/markdown"
+    assert "**Ana:** Checkout pays the bank.\n" in r.body.decode() and "And then" not in r.body.decode()
+
+    sess.view_transcript = [dict(TRANSCRIPT[3])]                         # only a line still being spoken
+    r = asyncio.run(server.export_transcript())
+    assert r.status_code == 400 and "empty" in json.loads(r.body)["error"]
+
+
+def test_export_questions_route(sess):
+    r = asyncio.run(server.export_questions())
+    assert r.headers["content-disposition"] == 'attachment; filename="order-flow-v2-questions.md"'
+    assert r.media_type == "text/markdown"
+    assert "## Open questions\n\n- Which bank?\n" in r.body.decode()
+
+    sess.questions = []
+    r = asyncio.run(server.export_questions())
+    assert r.status_code == 400 and json.loads(r.body)["ok"] is False
 
 
 def test_export_spec_route_passes_meaningful_transcript_and_all_boards(sess, monkeypatch):

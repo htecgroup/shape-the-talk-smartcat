@@ -48,8 +48,9 @@ multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to ano
   note, status and who changed it.
 - **⚡ Autopilot / ✋ Ask first:** whether the agents may remove nodes on their own or must ask first
   (see [ARCHITECTURE.md](ARCHITECTURE.md#approval-modes)).
-- **Export:** PNG of the current board, JSON or Mermaid of all boards, an AI-generated short spec, and the meeting
-  summary once the meeting has ended.
+- **Export:** PNG of the current board, JSON or Mermaid of all boards, the transcript (Markdown, a speaker's pieces
+  joined into one paragraph), the open questions and disagreements as the right panel lists them (Markdown, with
+  answers and resolutions), an AI-generated short spec, and the meeting summary once the meeting has ended.
 - **Feedback:** opens a short anonymous form (a Microsoft Form that doesn't record names) for feedback and feature
   requests. After a meeting ends a small callout points at it ("How was it?"), once; nothing blocks the board. `LW_FEEDBACK_URL` sets another
   form, empty hides the button.

@@ -25,8 +25,8 @@ goes through the queue first"*, the board redraws itself.
 - **A board that stays tidy:** background agents merge duplicates, group parts, and plan the layout so the story reads
   left to right.
 - **You stay in control:** *Ask first* mode makes the AI ask before it removes anything.
-- **After the meeting:** export PNG, JSON or Mermaid, generate a short spec, and read an auto-written meeting summary.
-  Every meeting is recorded (`runs/`).
+- **After the meeting:** export PNG, JSON or Mermaid, the transcript and the open questions, generate a short spec,
+  and read an auto-written meeting summary. Every meeting is recorded (`runs/`).
 - **Bonus, in Claude Code:** the [`shapethetalk` plugin](claude-mod/shapethetalk/README.md) lets Claude draw the
   same hand-drawn diagrams live in a pane beside the conversation while it explains code.
 
