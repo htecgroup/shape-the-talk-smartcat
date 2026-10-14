@@ -217,7 +217,8 @@ async def handle_command(msg: dict, room: str = DEFAULT_ROOM) -> dict:
             return {"ok": False, "error": "talk-live sessions start over /ws/mic (they need an audio stream)"}
         return await s.start(msg.get("mode", "live"), msg.get("run"), msg.get("speed"),
                              topic=msg.get("topic"), meeting_url=msg.get("meeting_url"),
-                             breakout_room=msg.get("breakout_room"))
+                             breakout_room=msg.get("breakout_room"),
+                             intro=msg["intro"] if isinstance(msg.get("intro"), bool) else None)
     if cmd == "stop":
         await s.stop_meeting()
     elif cmd == "pause":

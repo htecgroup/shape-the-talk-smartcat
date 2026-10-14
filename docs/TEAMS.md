@@ -29,10 +29,12 @@ free to run for yourself, not to resell as a hosted service) and posts webhooks 
    the bot leave and runs the usual end-of-meeting cleanup and saves the run; if the meeting ends or someone removes
    the bot, that happens by itself.
 
-The bot is called Klaudije unless `LW_ATTENDEE_BOT_NAME` says otherwise; the page shows whatever name the server uses.
-As soon as it has joined, also while it is still paused, it introduces itself in the meeting chat ("Hi everyone,
-I'm Klaudije, an AI bot that listens to this meeting..."), so nobody wonders who is listening. `LW_ATTENDEE_INTRO=0`
-turns that off, and `LW_ATTENDEE_INTRO_TEXT` sets your own text (`{bot_name}` is replaced by the bot's name).
+The bot is called Shape The Talk Bot unless `LW_ATTENDEE_BOT_NAME` says otherwise; the page shows whatever name the
+server uses. As soon as it has joined, also while it is still paused, it introduces itself in the meeting chat ("Hi
+everyone, I'm Shape The Talk Bot. I'm an AI that listens to this meeting..."), so nobody wonders who is listening. Untick **Say hi in the
+meeting chat when the bot joins** under the link to skip it for a meeting; the browser remembers the choice.
+`LW_ATTENDEE_INTRO=0` makes the box start unticked, and `LW_ATTENDEE_INTRO_TEXT` sets your own text (`{bot_name}` is
+replaced by the bot's name).
 
 ## Starts paused
 

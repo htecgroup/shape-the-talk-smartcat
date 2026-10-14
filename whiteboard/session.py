@@ -151,7 +151,8 @@ class Session(AgentPipeline, ApprovalGate):
             "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
-                   else {"state": "idle", "error": attendee.config_error(), "bot_name": attendee.BOT_NAME},
+                   else {"state": "idle", "error": attendee.config_error(), "bot_name": attendee.BOT_NAME,
+                         "intro": attendee.INTRO},
         }
 
     def busy(self) -> bool:
@@ -234,7 +235,7 @@ class Session(AgentPipeline, ApprovalGate):
     # --------------------------------------------------------------- controls
     async def start(self, mode: str = "live", run: str | None = None, speed: float | None = None,
                     speaker: str | None = None, topic: str | None = None, meeting_url: str | None = None,
-                    breakout_room: str | None = None) -> dict:
+                    breakout_room: str | None = None, intro: bool | None = None) -> dict:
         if self.status in ("running", "paused"):
             return {"ok": False, "error": "already running; reset first"}
         if mode == "teams":
@@ -264,7 +265,7 @@ class Session(AgentPipeline, ApprovalGate):
                 self.mode = "mic"
             elif mode == "teams":
                 self.meeting = attendee.teams_meeting(topic)
-                self.source = AttendeeSource(meeting_url, topic, breakout_room)
+                self.source = AttendeeSource(meeting_url, topic, breakout_room, intro)
                 self.source.session = self
                 self.mode = "teams"
             else:

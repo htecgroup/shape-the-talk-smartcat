@@ -574,7 +574,10 @@
     $("botHintName").textContent = name;
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
-    $("teamsUrl").disabled = $("teamsRoom").disabled = running;
+    $("teamsUrl").disabled = $("teamsRoom").disabled = $("teamsIntro").disabled = running;
+    // the intro checkbox: this browser's last choice, else the server's default (LW_ATTENDEE_INTRO)
+    const intro = store.get("lw.teamsIntro");
+    $("teamsIntro").checked = intro ? intro === "1" : S.bot.intro !== false;
     syncUrlClear();
     // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
     $("teamsFields").hidden = $("botHint").hidden = running;
@@ -599,7 +602,8 @@
     const url = $("teamsUrl").value.trim();
     const room = $("teamsRoom").value.trim();
     store.set("lw.teamsUrl", url);   // the room is not remembered: a stale one would make the bot wait for it
-    send({ cmd: "start", mode: "teams", meeting_url: url, breakout_room: room || null });   // no topic: the agents infer it from the talk
+    send({ cmd: "start", mode: "teams", meeting_url: url, breakout_room: room || null,      // no topic: the agents infer it from the talk
+           intro: $("teamsIntro").checked });
   }
 
   // -------------------------------------------------------------- talk live
@@ -700,6 +704,7 @@
     syncUrlClear();
     $("teamsUrl").focus();
   });
+  $("teamsIntro").addEventListener("change", (e) => store.set("lw.teamsIntro", e.target.checked ? "1" : "0"));
   $("btnTeamsJoin").addEventListener("click", teamsClick);
   $("btnTeamsPause").addEventListener("click", () => send({ cmd: "listen", on: S.bot.state === "paused" }));
   $("teamsUrl").addEventListener("keydown", (e) => {

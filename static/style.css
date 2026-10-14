@@ -218,6 +218,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields input { font: inherit; font-size: 13px; font-weight: 400; padding: 6px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
 .mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
 .mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
+.mic-fields label.check { flex-direction: row; align-items: center; gap: 7px; font-weight: 400; cursor: pointer; }
+.mic-fields label.check input { margin: 0; padding: 0; width: 14px; height: 14px; accent-color: var(--orange); cursor: pointer; }
 .field { position: relative; display: flex; }
 .field input { flex: 1; min-width: 0; padding-right: 30px; }
 .field-clear { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: flex; padding: 3px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
