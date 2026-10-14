@@ -152,7 +152,7 @@ class Session(AgentPipeline, ApprovalGate):
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
                    else {"state": "idle", "error": attendee.config_error(), "bot_name": attendee.BOT_NAME,
-                         "intro": attendee.INTRO},
+                         "intro": attendee.INTRO, "intro_text": attendee.intro_message()},
         }
 
     def busy(self) -> bool:

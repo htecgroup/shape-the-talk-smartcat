@@ -578,6 +578,7 @@
     // the intro checkbox: this browser's last choice, else the server's default (LW_ATTENDEE_INTRO)
     const intro = store.get("lw.teamsIntro");
     $("teamsIntro").checked = intro ? intro === "1" : S.bot.intro !== false;
+    $("introText").textContent = S.bot.intro_text || "";
     syncUrlClear();
     // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
     $("teamsFields").hidden = $("botHint").hidden = running;
@@ -705,6 +706,14 @@
     $("teamsUrl").focus();
   });
   $("teamsIntro").addEventListener("change", (e) => store.set("lw.teamsIntro", e.target.checked ? "1" : "0"));
+  // the "i" next to it shows the intro text on hover; a click keeps it open until Escape or a click elsewhere
+  function pinIntro(on) {
+    $("introInfo").closest(".info-wrap").classList.toggle("open", on);
+    $("introInfo").setAttribute("aria-expanded", on);
+  }
+  $("introInfo").addEventListener("click", (e) => { e.stopPropagation(); pinIntro($("introInfo").getAttribute("aria-expanded") !== "true"); });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".info-wrap")) pinIntro(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") pinIntro(false); });
   $("btnTeamsJoin").addEventListener("click", teamsClick);
   $("btnTeamsPause").addEventListener("click", () => send({ cmd: "listen", on: S.bot.state === "paused" }));
   $("teamsUrl").addEventListener("keydown", (e) => {

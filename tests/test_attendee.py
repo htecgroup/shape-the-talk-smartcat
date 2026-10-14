@@ -132,8 +132,10 @@ def test_start_needs_config_and_a_link(fake_pipeline, monkeypatch):
 def test_idle_bot_status_carries_the_configured_name_and_intro(fake_pipeline, monkeypatch):
     monkeypatch.setattr(attendee, "BOT_NAME", "Klaudije Antropić")
     monkeypatch.setattr(attendee, "INTRO", False)
+    monkeypatch.setattr(attendee, "INTRO_TEXT", "I'm {bot_name}.")
     bot = Session().snapshot()["bot"]
     assert bot["state"] == "idle" and bot["bot_name"] == "Klaudije Antropić" and bot["intro"] is False
+    assert bot["intro_text"] == "I'm Klaudije Antropić."              # shown next to the checkbox
 
 
 def test_create_bot_request(teams, monkeypatch):

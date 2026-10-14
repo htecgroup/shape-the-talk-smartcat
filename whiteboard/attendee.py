@@ -112,6 +112,11 @@ def config_error() -> str | None:
     return None
 
 
+def intro_message(bot_name: str | None = None) -> str:
+    """The chat intro as the bot sends it (the page shows it next to the checkbox)."""
+    return INTRO_TEXT.replace("{bot_name}", bot_name or BOT_NAME)
+
+
 def teams_meeting(topic: str | None) -> dict:
     topic = (topic or "").strip()[:200]
     return {
@@ -289,7 +294,7 @@ class AttendeeSource:
     def public_state(self) -> dict:
         return {"state": self.state, "error": self.error, "bot_name": self.bot_name, "bot_id": self.bot_id,
                 "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening,
-                "intro": self.send_intro}
+                "intro": self.send_intro, "intro_text": intro_message(self.bot_name)}
 
     async def _set_state(self, state: str, error: str | None = None) -> None:
         if state == "in_meeting" and not self.listening:     # joined paused: shown paused until Resume
@@ -357,7 +362,7 @@ class AttendeeSource:
 
     async def _send_intro(self) -> None:
         """Tell the meeting in the chat who the bot is and why it listens. A failure is only logged."""
-        text = INTRO_TEXT.replace("{bot_name}", self.bot_name)
+        text = intro_message(self.bot_name)
         try:
             res = await self._http().post(f"/api/v1/bots/{self.bot_id}/send_chat_message", json={"message": text})
             if res.status_code >= 400:

@@ -219,6 +219,22 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
 .mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
 .mic-fields label.check { flex-direction: row; align-items: center; gap: 7px; font-weight: 400; cursor: pointer; }
+.check-row { display: flex; align-items: center; gap: 4px; }
+.info-wrap { position: relative; display: inline-flex; }
+.info { display: flex; padding: 2px; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.info:hover, .info[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
+.info .i { margin: 0; width: 15px; height: 15px; }
+/* the intro text: a dark bubble above the "i" on hover or keyboard focus, kept open by a click (.open); right-aligned
+   to the icon, as the panel's edge would cut off a centred one */
+.info-pop {
+  display: none; position: absolute; right: -10px; bottom: calc(100% + 8px); z-index: 30; width: 260px; padding: 9px 11px;
+  border-radius: 9px; background: #24203a; color: #fff; font-size: 12px; font-weight: 400; line-height: 1.45;
+  box-shadow: 0 6px 18px rgba(14, 19, 80, .25);
+}
+.info-pop::after { content: ""; position: absolute; top: 100%; right: 12px; border: 6px solid transparent; border-top-color: #24203a; }
+.info-wrap:hover .info-pop, .info-wrap.open .info-pop, .info:focus-visible + .info-pop { display: block; }
+.info-title { margin-bottom: 2px; font-weight: 600; color: #c9c2fb; }
+.info-pop p { margin: 0; }
 .mic-fields label.check input { margin: 0; padding: 0; width: 14px; height: 14px; accent-color: var(--orange); cursor: pointer; }
 .field { position: relative; display: flex; }
 .field input { flex: 1; min-width: 0; padding-right: 30px; }
