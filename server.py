@@ -218,7 +218,8 @@ async def handle_command(msg: dict, room: str = DEFAULT_ROOM) -> dict:
         return await s.start(msg.get("mode", "live"), msg.get("run"), msg.get("speed"),
                              topic=msg.get("topic"), meeting_url=msg.get("meeting_url"),
                              breakout_room=msg.get("breakout_room"),
-                             intro=msg["intro"] if isinstance(msg.get("intro"), bool) else None)
+                             intro=msg["intro"] if isinstance(msg.get("intro"), bool) else None,
+                             lang=msg.get("language"))
     if cmd == "stop":
         await s.stop_meeting()
     elif cmd == "pause":
@@ -349,7 +350,8 @@ async def mic_endpoint(ws: WebSocket, room: str = DEFAULT_ROOM) -> None:
                     await refuse("Another browser is already talking live. Stop it or press Reset.")
                     continue
                 else:
-                    res = await s.start("mic", speaker=data.get("speaker"), topic=data.get("topic"))
+                    res = await s.start("mic", speaker=data.get("speaker"), topic=data.get("topic"),
+                                        lang=data.get("language"))
                     if not res.get("ok"):
                         await refuse(res.get("error", "could not start"))
                         continue

@@ -18,7 +18,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import chunking
+from . import chunking, language
 from .audio import EnergyVAD
 from .chunking import FILLER_ONLY, RunningCaption, is_meaningless  # noqa: F401 (re-exported)
 from .stt import BENIGN_ERRORS, RealtimeTranscriber, UpstreamError
@@ -67,17 +67,24 @@ class ScriptedSource:
         return None
 
 
-def mic_meeting(speaker: str | None, topic: str | None) -> dict:
+def mic_meeting(speaker: str | None, topic: str | None, lang: str | None = None) -> dict:
     speaker = (speaker or "").strip()[:40] or DEFAULT_SPEAKER
     topic = (topic or "").strip()[:200]
     return {
-        "id": "talk_live", "source": "mic",
+        "id": "talk_live", "source": "mic", "language": language.choose(lang),
         "title": f"Talk live: {topic}" if topic else "Talk live",
         "topic": topic or DEFAULT_TOPIC,
         "participants": [{"name": speaker, "color": SPEAKER_COLOR,
                           "role": "Talking at the microphone (others in the room may share it)"}],
         "utterances": [],
     }
+
+
+def stt_prompt(topic: str | None, lang: str) -> str | None:
+    """A hint for the transcriber. A Serbian one is written in Latin script, which also nudges it towards Latin."""
+    if lang == "sr":
+        return "Razgovor na srpskom o dizajnu sistema." + (f" Tema: {topic}" if topic else "")
+    return f"Someone designing a system out loud. Topic: {topic}" if topic else None
 
 
 class MicSource:
@@ -96,11 +103,12 @@ class MicSource:
     kind = "mic"
 
     def __init__(self, speaker: str, topic: str | None = None,
-                 transcriber_factory: Callable[..., Any] | None = None) -> None:
+                 transcriber_factory: Callable[..., Any] | None = None, lang: str | None = None) -> None:
         self.speaker = speaker
         self.topic = topic
+        self.language = language.choose(lang)
         self.factory = transcriber_factory or (lambda on_event: RealtimeTranscriber(
-            on_event, prompt=f"Someone designing a system out loud. Topic: {topic}" if topic else None))
+            on_event, prompt=stt_prompt(topic, self.language), language=language.get(self.language).stt))
         self.session: "Session | None" = None
         self.state = "idle"        # idle | connecting | listening | stopping | stopped | error
         self.error: str | None = None

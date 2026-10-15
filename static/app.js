@@ -34,6 +34,8 @@
     summary: null, summaryWriting: false,     // {title, markdown, filename}, written when the meeting ends
     bot: { state: "idle", error: null },     // the Teams meeting bot
     newTabPending: false,                     // New tab asked for: the next thing said starts a new diagram
+    languages: [], defaultLanguage: "en",     // spoken languages the server offers (LW_LANGUAGE is the default)
+    meetingLanguage: null,                    // the language of the meeting on the server, once one started
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
                   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
@@ -113,6 +115,7 @@
     setStatus(s.status, s.mode, s.speed);
     renderApprovals(s.approvals || []);
     setFeedback(s.feedback_url);
+    setLanguages(s.languages, s.default_language);
     updateProgress();
   }
 
@@ -140,11 +143,37 @@
   $("feedbackCalloutClose").addEventListener("click", () => nudgeFeedback(false));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") nudgeFeedback(false); });
 
+  // --------------------------------------------------------------- language
+  // The spoken language of the next meeting (both panels show the same choice, remembered per browser; the server's
+  // LW_LANGUAGE otherwise). While a meeting runs (or a stopped talk-live one can continue) they show its language.
+  // The board stays in English either way.
+  function setLanguages(list, def) {
+    S.languages = list || []; S.defaultLanguage = def || "en";
+    for (const id of ["micLang", "teamsLang"]) {
+      $(id).innerHTML = S.languages.map((l) => `<option value="${esc(l.code)}">${esc(l.name)}</option>`).join("");
+    }
+    syncLanguage();
+  }
+  function chosenLanguage() {
+    const saved = store.get("lw.language");
+    return S.languages.some((l) => l.code === saved) ? saved : S.defaultLanguage;
+  }
+  function syncLanguage() {
+    if (!S.languages.length) return;
+    const current = S.status === "running" || S.status === "paused" || canContinue();
+    $("micLang").value = $("teamsLang").value = (current && S.meetingLanguage) || chosenLanguage();
+  }
+  for (const id of ["micLang", "teamsLang"]) {
+    $(id).addEventListener("change", (e) => { store.set("lw.language", e.target.value); syncLanguage(); });
+  }
+
   // ---------------------------------------------------------------- meeting
   function setMeeting(m) {
     if (!m) return;
     S.meetingTitle = m.title;
     S.source = m.source || "scripted";
+    S.meetingLanguage = S.source === "idle" ? null : m.language || null;
+    syncLanguage();
     renderTranscriptSub();
     S.total = m.total || 0;
     S.participants = m.participants;
@@ -575,6 +604,7 @@
     setSummaryItem();
     updateMicUI();
     updateTeamsUI();
+    syncLanguage();
   }
 
   function setMode(mode) {
@@ -620,7 +650,7 @@
     $("botHintName").textContent = name;
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
-    $("teamsUrl").disabled = $("teamsRoom").disabled = $("teamsIntro").disabled = running;
+    $("teamsUrl").disabled = $("teamsRoom").disabled = $("teamsIntro").disabled = $("teamsLang").disabled = running;
     // the intro checkbox: this browser's last choice (also kept in S, storage may be blocked), else LW_ATTENDEE_INTRO
     const intro = S.teamsIntro ?? store.get("lw.teamsIntro");
     $("teamsIntro").checked = intro ? intro === "1" : S.bot.intro_default !== false;
@@ -650,7 +680,7 @@
     const room = $("teamsRoom").value.trim();
     store.set("lw.teamsUrl", url);   // the room is not remembered: a stale one would make the bot wait for it
     send({ cmd: "start", mode: "teams", meeting_url: url, breakout_room: room || null,      // no topic: the agents infer it from the talk
-           intro: $("teamsIntro").checked });
+           intro: $("teamsIntro").checked, language: chosenLanguage() });
   }
 
   // -------------------------------------------------------------- talk live
@@ -676,7 +706,7 @@
     const btn = $("btnStart");
     $("micRec").className = `rec rec-${st}`;
     $("micStateText").textContent = MIC_TEXT[st] || st;
-    $("micName").disabled = $("micTopic").disabled = running || canContinue();
+    $("micName").disabled = $("micTopic").disabled = $("micLang").disabled = running || canContinue();
     const canMute = st === "listening" && S.micOwner && Mic.active;
     const muted = canMute && Mic.muted;
     $("btnMute").hidden = !canMute;
@@ -718,7 +748,7 @@
     showMicError(null);
     $("btnStart").disabled = true;
     $("micStateText").textContent = "Allow the microphone…";   // the browser permission prompt may be open
-    const ok = await Mic.start({ speaker, topic, resume, room: ROOM }, {
+    const ok = await Mic.start({ speaker, topic, language: chosenLanguage(), resume, room: ROOM }, {
       onState: (ev) => onMicState(ev),
       onLevel: (rms) => setLevel(rms),
       onError: (msg) => { S.micOwner = false; showMicError(msg); setLevel(0); updateMicUI(); },

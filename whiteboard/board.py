@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .language import ascii_fold
+
 NODE_TYPES = {"actor", "system", "step", "decision", "data", "task"}
 STATUSES = {"confirmed", "ghost", "disputed", "resolved"}
 BOARD_KINDS = {"process", "architecture", "stakeholder", "mindmap", "timeline"}
@@ -60,7 +62,8 @@ class OpError(ValueError):
 
 
 def slug(value: Any) -> str:
-    s = re.sub(r"[^a-z0-9_]+", "_", str(value).strip().lower()).strip("_")
+    """An id: lower-case a-z, 0-9 and _ (Serbian letters folded: "Plaćanje" -> "placanje")."""
+    s = re.sub(r"[^a-z0-9_]+", "_", ascii_fold(str(value)).strip().lower()).strip("_")
     return s[:48]
 
 

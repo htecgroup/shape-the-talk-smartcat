@@ -6,7 +6,7 @@ also rewrites the utterance into clean, self-contained claims.
 
 from __future__ import annotations
 
-from .. import vocabulary
+from .. import language, vocabulary
 from .context import is_live_speech, line, participants
 from .extractor_jev import board_line, extract_jev
 from .llm import CallResult, call_json
@@ -29,5 +29,6 @@ async def extract(meeting: dict, context: list[dict], utt: dict, board: dict | N
     system = EXTRACTOR_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
                                      participants=participants(meeting), known_terms=vocabulary.prompt_section(),
                                      speech_notes=EXTRACTOR_SPEECH_NOTES if is_live_speech(meeting) else "")
+    system += language.prompt_note(meeting)
     return await call_json("extraction", system, build_extractor_user(context, utt, board), EXTRACTOR_SCHEMA,
                            EXTRACTOR_EFFORT, model=EXTRACTOR_MODEL, thinking=EXTRACTOR_THINKING)

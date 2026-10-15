@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+from .. import language
 from .context import line, participants
 from .llm import CallResult, call_json
 from .prompts.analyst import ANALYST_SYSTEM
@@ -23,6 +24,6 @@ def build_analyst_user(transcript: list[dict], board_compact: dict,
 async def analyse(meeting: dict, transcript: list[dict], board_compact: dict,
                   prev_questions: list, prev_disagreements: list) -> CallResult:
     system = ANALYST_SYSTEM.format(title=meeting["title"], topic=meeting["topic"],
-                                   participants=participants(meeting))
+                                   participants=participants(meeting)) + language.prompt_note(meeting)
     user = build_analyst_user(transcript, board_compact, prev_questions, prev_disagreements)
     return await call_json("analysis", system, user, ANALYST_SCHEMA, ANALYST_EFFORT)
