@@ -12,6 +12,7 @@ from typing import Any
 
 from typesafe_sdk import Choice, Noul
 
+from .. import language
 from .context import is_live_speech, line, participants
 from .llm import CallResult, jev_client
 from .prompts.extractor_jev import (JEV_KIND_CRITERIA, JEV_KIND_INSTRUCTIONS, JEV_REFERS_TO_INSTRUCTIONS,
@@ -35,6 +36,8 @@ def build_jev_request(meeting: dict, context: list[dict], utt: dict) -> tuple[di
     }
     if is_live_speech(meeting):
         state["speech_note"] = JEV_SPEECH_NOTE
+    if note := language.jev_note(meeting):
+        state["language_note"] = note
     questions: dict[str, Any] = {
         "kind": Choice(instructions=JEV_KIND_INSTRUCTIONS, criteria=JEV_KIND_CRITERIA),
         "topic_shift": Noul(instructions=JEV_TOPIC_SHIFT_INSTRUCTIONS, criteria=JEV_TOPIC_SHIFT_CRITERIA),

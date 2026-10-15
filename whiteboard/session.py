@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import agents, export, vocabulary
+from . import agents, export, language, vocabulary
 from .approvals import DEFAULT_APPROVAL_MODE, ApprovalGate
 from . import attendee
 from .attendee import AttendeeSource
@@ -63,7 +63,9 @@ def load_meeting(path: Path | None = None) -> dict:
         if not path.is_absolute() and not path.exists():
             path = ROOT / path
     path = path or sorted(DATA_DIR.glob("meeting_*.json"))[0]
-    return json.loads(path.read_text())
+    meeting = json.loads(path.read_text())
+    meeting.setdefault("language", "en")        # a meeting file in another language says so
+    return meeting
 
 
 class Clock:
@@ -148,6 +150,7 @@ class Session(AgentPipeline, ApprovalGate):
             "questions": self.questions, "disagreements": self.disagreements, "summary": self.summary,
             "runs": list_runs(), "replay_name": self.replay_name, "model": agents.MODEL,
             "feedback_url": FEEDBACK_URL,
+            "languages": language.public(), "default_language": language.DEFAULT,
             "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
@@ -170,12 +173,13 @@ class Session(AgentPipeline, ApprovalGate):
     def _meeting_public(self) -> dict:
         m = self.meeting
         return {"id": m.get("id"), "title": m["title"], "topic": m.get("topic"), "source": m.get("source", "scripted"),
+                "language": language.choose(m.get("language")),
                 # a copy, so a recorded event keeps the people of its moment (Teams adds them as they join)
                 "participants": [dict(p) for p in m["participants"]], "total": len(m.get("utterances", []))}
 
     # -------------------------------------------------------------- broadcast
     async def emit(self, event: dict, record: bool = True) -> None:
-        event = _fix_vocabulary(event)
+        event = _fix_text(event, self.meeting.get("language"))
         if "t" not in event:
             event["t"] = round(time.perf_counter() - self.t0, 3)
         self._reduce(event)
@@ -235,7 +239,7 @@ class Session(AgentPipeline, ApprovalGate):
     # --------------------------------------------------------------- controls
     async def start(self, mode: str = "live", run: str | None = None, speed: float | None = None,
                     speaker: str | None = None, topic: str | None = None, meeting_url: str | None = None,
-                    breakout_room: str | None = None, intro: bool | None = None) -> dict:
+                    breakout_room: str | None = None, intro: bool | None = None, lang: str | None = None) -> dict:
         if self.status in ("running", "paused"):
             return {"ok": False, "error": "already running; reset first"}
         if mode == "teams":
@@ -253,19 +257,20 @@ class Session(AgentPipeline, ApprovalGate):
                 return {"ok": False, "error": "no recorded runs found"}
             data = json.loads(path.read_text())
             self.meeting = data.get("meeting", self.meeting)
+            self.meeting.setdefault("language", "en")   # runs recorded before meetings had a language
             self.mode, self.replay_name = "replay", path.name
             self.status = "running"
             await self._send_all(self.snapshot())
             self._tasks = [asyncio.create_task(self._run_replay(data["events"]))]
         else:
             if mode == "mic":
-                self.meeting = mic_meeting(speaker, topic)
-                self.source = MicSource(self.meeting["participants"][0]["name"], topic)
+                self.meeting = mic_meeting(speaker, topic, lang)
+                self.source = MicSource(self.meeting["participants"][0]["name"], topic, lang=self.meeting["language"])
                 self.source.session = self      # the browser can connect before run() starts
                 self.mode = "mic"
             elif mode == "teams":
-                self.meeting = attendee.teams_meeting(topic)
-                self.source = AttendeeSource(meeting_url, topic, breakout_room, intro)
+                self.meeting = attendee.teams_meeting(topic, lang)
+                self.source = AttendeeSource(meeting_url, topic, breakout_room, intro, lang=self.meeting["language"])
                 self.source.session = self
                 self.mode = "teams"
             else:
@@ -378,16 +383,21 @@ class Session(AgentPipeline, ApprovalGate):
             self.run_file = name
 
 
-def _fix_vocabulary(event: dict) -> dict:
-    """Transcript text as the viewers see it, with misheard product names fixed (data/vocabulary.json). Every source
-    shows its text through these events, so this one place covers them all; a copy, as the source may keep the dict."""
+def fix_text(text: str, lang: str | None) -> str:
+    """Transcript text in the meeting's script (Serbian: Latin), with misheard product names fixed (data/vocabulary.json)."""
+    return vocabulary.fix(language.normalize(text, lang))
+
+
+def _fix_text(event: dict, lang: str | None) -> dict:
+    """Transcript text as the viewers see it (fix_text). Every source shows its text through these events, so this one
+    place covers them all; a copy, as the source may keep the dict."""
     t = event.get("type")
     if t == "utterance_start" and isinstance(event.get("utt"), dict) and event["utt"].get("text"):
-        fixed = vocabulary.fix(event["utt"]["text"])
+        fixed = fix_text(event["utt"]["text"], lang)
         if fixed != event["utt"]["text"]:
             return {**event, "utt": {**event["utt"], "text": fixed}}
     elif t in ("utterance_interim", "utterance_final") and event.get("text"):
-        fixed = vocabulary.fix(event["text"])
+        fixed = fix_text(event["text"], lang)
         if fixed != event["text"]:
             return {**event, "text": fixed}
     return event

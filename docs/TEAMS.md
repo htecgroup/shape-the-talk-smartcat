@@ -56,6 +56,11 @@ separate audio per person, which makes diarization good but not perfect when peo
 `openai` uses OpenAI transcription inside Attendee: better text, higher latency, needs an OpenAI key there.
 Signed in bots (`ATTENDEE_TEAMS_LOGIN=1`) help with meetings that require an account.
 
+**Spoken language** (English or Serbian, on the page): a Serbian meeting sets the Teams captions to Serbian (`sr-rs`),
+which Teams does for everyone in the meeting, and the bot keeps setting it back for 4 hours if someone changes it. With
+`openai` transcription it sets the OpenAI language instead. English leaves the captions language as the meeting has it
+(or `ATTENDEE_TEAMS_LANGUAGE`). See [USAGE.md](USAGE.md#languages).
+
 ## Breakout rooms
 
 Fill in **Breakout room** under the link (`Room 4`, or just `4`). The bot joins the main meeting, waits until that

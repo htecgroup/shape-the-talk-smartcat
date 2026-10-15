@@ -36,6 +36,19 @@ The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` a
 after 700 ms of quiet; its final transcript sends only what is left and fixes the earlier pieces on screen. Server-VAD
 models stream no text mid-speech, so their segments go out whole.
 
+## Languages
+
+Meetings can be held in English or Serbian: pick the **Spoken language** in the Talk live or Teams panel before you
+start (`LW_LANGUAGE` sets the default, `en`; a browser remembers its last choice). It sets what the transcription
+listens for: the OpenAI transcription language in talk live, the Teams captions language in a Teams meeting.
+
+The board, the open questions, the summary and the spec stay in English: the agents read the Serbian transcript and
+write in English. Serbian transcripts are always shown in Latin script (OpenAI often writes Serbian in Cyrillic; the
+conversion is exact). Node ids and file names fold Serbian letters (č → c, đ → dj), and lone Serbian fillers ("ovaj",
+"znači") never reach the agents like "um" doesn't.
+
+One language per meeting: a Teams meeting has one captions language at a time.
+
 ## Custom vocabulary
 
 Speech-to-text (Teams captions especially, which take no custom vocabulary) mishears product names: "Geoff classifier"

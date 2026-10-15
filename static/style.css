@@ -215,9 +215,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .mic-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
 .mic-fields .opt { font-weight: 400; color: var(--muted); }
-.mic-fields input { font: inherit; font-size: 13px; font-weight: 400; padding: 6px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
-.mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
-.mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
+.mic-fields input, .mic-fields select { font: inherit; font-size: 13px; font-weight: 400; padding: 6px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+.mic-fields input:focus, .mic-fields select:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
+.mic-fields input:disabled, .mic-fields select:disabled { background: var(--hover); color: var(--ink-2); }
 .mic-fields label.check { flex-direction: row; align-items: center; gap: 7px; font-weight: 400; cursor: pointer; }
 .check-row { display: flex; align-items: center; gap: 4px; }
 .info-wrap { position: relative; display: inline-flex; }

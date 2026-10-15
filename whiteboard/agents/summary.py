@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+from .. import language
 from .context import participants
 from .llm import CallResult, call_json
 from .prompts.summary import SUMMARY_SYSTEM
@@ -44,6 +45,6 @@ def build_summary_user(meeting: dict, transcript: list[dict], boards: list[dict]
 async def generate_summary(meeting: dict, transcript: list[dict], boards: list[dict],
                            questions: list, disagreements: list) -> CallResult:
     system = SUMMARY_SYSTEM.format(title=meeting["title"], topic=meeting.get("topic") or "",
-                                   participants=participants(meeting))
+                                   participants=participants(meeting)) + language.prompt_note(meeting)
     user = build_summary_user(meeting, transcript, boards, questions, disagreements)
     return await call_json("summary", system, user, SUMMARY_SCHEMA, SUMMARY_EFFORT, timeout=SUMMARY_TIMEOUT)

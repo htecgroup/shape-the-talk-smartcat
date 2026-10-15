@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from .. import vocabulary
+from .. import language, vocabulary
 from . import settings
 from .context import is_live_speech, line, participants
 from .llm import CallResult, call_json
@@ -54,6 +54,7 @@ async def consolidate(meeting: dict, transcript: list[dict], board_compact: dict
                                         participants=participants(meeting), known_terms=vocabulary.prompt_section(),
                                         speech_notes=CONSOLIDATOR_SPEECH_NOTES if is_live_speech(meeting) else "",
                                         layout_notes=CONSOLIDATOR_LAYOUT_NOTES if hints else "")
+    system += language.prompt_note(meeting)
     res = await call_json("consolidation", system, build_consolidator_user(transcript, board_compact, layout),
                           CONSOLIDATOR_SCHEMA if hints else MODELLER_SCHEMA, CONSOLIDATOR_EFFORT,
                           model=CONSOLIDATOR_MODEL, thinking=CONSOLIDATOR_THINKING)
