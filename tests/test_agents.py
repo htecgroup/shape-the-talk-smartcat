@@ -46,8 +46,10 @@ def test_jev_request_has_state_and_all_questions():
 
 def test_jev_answers_map_to_extraction_shape():
     assert agents.jev_to_extraction(UTT, "resolution", "u02", 0.1) == {
-        "kind": "resolution", "claims": ["Right, the gateway."], "refers_to": "u02", "topic_shift": False}
+        "kind": "resolution", "claims": ["Right, the gateway."], "refers_to": "u02", "topic_shift": False,
+        "possible_shift": False}
     assert agents.jev_to_extraction(UTT, "correction", "none", 0.0)["refers_to"] is None
     assert agents.jev_to_extraction(UTT, "new_info", "u02", 0.7) == {
-        "kind": "new_info", "claims": ["Right, the gateway."], "refers_to": None, "topic_shift": True}
+        "kind": "new_info", "claims": ["Right, the gateway."], "refers_to": None, "topic_shift": True,
+        "possible_shift": False}
     assert agents.jev_to_extraction(UTT, "chit_chat", None, 0.0)["claims"] == []

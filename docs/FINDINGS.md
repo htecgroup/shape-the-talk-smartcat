@@ -135,3 +135,25 @@ text rendered live in italics during a feed run, and a talk-live run replayed. R
   them; don't relax it. When the bot's room emptied, the end message also carried a different id, so the bot left through
   Attendee's 60 s "only participant" rule instead.
 - Not tested: signed-in bots, rooms with automatic moves turned off, a meeting run by another organisation (who may admit from the room lobby).
+
+## New topics, new tabs (measured 2026-10-15)
+
+Test material: a real 147-utterance team standup recorded in talk live (not in the repo: it is a client meeting), with
+7 topic boundaries labelled by hand (the next person's update, a new problem), and the scripted FreshBite meeting (one
+explicit "let me switch gears"). Few boundaries are announced; most just start.
+
+- **Extractor alone** (Jev over the standup, a detection up to 3 utterances after a boundary counts): the old question
+  ("does it *explicitly* move to another subject?", last 6 lines only) found 2 of 7 at p ≥ 0.5. With the board on
+  screen in the question and implicit shifts in the criteria: 7 of 7 at 0.5 (6 false alarms), 5 of 7 at 0.6 (1).
+  No threshold separates the two cleanly, so Jev only proposes (≥ 0.6 shift, 0.4-0.6 possible) and the modeller,
+  which sees the whole board, decides.
+- **Whole pipeline** (simulate.py, Sonnet modeller): the standup first stayed at 2 tabs, as in the original meeting.
+  The flags were there, but a new subject usually starts vague ("going on with your bugs"): the modeller drew
+  nothing for that utterance, the flag was used up, and the clearer next ones landed on the old board. A shift the
+  modeller draws nothing for now waits for the next utterance with content (like one heard in small talk). Then:
+  8 tabs, one per topic, 6 of the 7 boundaries within 5 utterances (the seventh, after a stretch of garbled speech,
+  19 late); two tabs have a single node. FreshBite still has exactly its 2 tabs.
+- **No splitting where the topic stays:** three single-topic meetings stay on one tab: a Teams architecture demo cut
+  into 38 short pieces (one possible shift, ignored), a talk-live walkthrough where the speaker hands over ("now back
+  to Philip", flagged as a shift twice) and the next person keeps editing the same diagram, and the TTS coffee monologue
+  (no flags).

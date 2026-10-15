@@ -32,6 +32,7 @@
     deciding: new Set(), approvalsSig: null,  // proposals clicked, waiting to leave the list; last rendered panel
     summary: null, summaryWriting: false,     // {title, markdown, filename}, written when the meeting ends
     bot: { state: "idle", error: null },     // the Teams meeting bot
+    newTabPending: false,                     // New tab asked for: the next thing said starts a new diagram
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
                   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
@@ -71,6 +72,7 @@
       case "analysis": return renderLists(ev.questions, ev.disagreements);
       case "approval_mode": return setApprovalMode(ev.mode);
       case "approvals": return renderApprovals(ev.pending);
+      case "new_tab": S.newTabPending = ev.pending; return renderTabs();
       case "summary_writing":
         S.summaryWriting = true; setSummaryItem(); return toast("System", "Writing the meeting summary…");
       case "summary": toast("System", "Meeting summary ready. Find it under Export"); return setSummary(ev.summary);
@@ -96,7 +98,7 @@
     for (const a of s.activity) addActivity(a, false);
     renderLists(s.questions, s.disagreements);
     S.summaryWriting = false; setSummary(s.summary);
-    S.board = null; S.knownBoards = new Set(); S.followActive = true;
+    S.board = null; S.knownBoards = new Set(); S.followActive = true; S.newTabPending = !!s.new_tab_pending;
     Board.reset();
     // a board that already has a layout plan is shown laid out by it
     Board.relayout(((s.board && s.board.boards) || []).filter((b) => b.layout).map((b) => b.id));
@@ -243,13 +245,16 @@
   }
 
   function onExtraction(ev) {
-    setKind(ev.id, ev.kind, ev.topic_shift);
+    setKind(ev.id, ev.kind, ev.topic_shift, ev.possible_shift);
   }
 
-  function setKind(id, kind, shift) {
+  const shiftTag = (shift, possible) => shift ? `<span class="kind k-shift">topic shift</span>`
+    : possible ? `<span class="kind k-shift maybe" title="Maybe a new topic: the modeller decides whether it needs a new tab">topic shift?</span>` : "";
+
+  function setKind(id, kind, shift, possible) {
     const e = S.utts.get(id); if (!e) return;
     const k = e.el.querySelector(".kinds");
-    k.innerHTML = `<span class="kind k-${kind}">${KIND_LABEL[kind] || kind}</span>` + (shift ? `<span class="kind k-shift">topic shift</span>` : "");
+    k.innerHTML = `<span class="kind k-${kind}">${KIND_LABEL[kind] || kind}</span>` + shiftTag(shift, possible);
     if (kind === "chit_chat") e.el.classList.add("ignored");
   }
 
@@ -318,14 +323,26 @@
     if (b) Board.render(b, { silent: true });
   }
 
+  // New tab: during a meeting (once the first diagram exists) a "+" after the tabs asks the server to start the next
+  // thing said on a new diagram; while that waits it is a dashed tab, and a click cancels it
+  function newTabButton() {
+    const can = S.status === "running" && ["live", "mic", "teams"].includes(S.serverMode);
+    if (!can) return "";
+    return S.newTabPending
+      ? `<button class="tab tab-add pending" id="btnNewTab" title="The next thing said starts a new diagram. Click to cancel">${ico("plus")}New diagram · next thing said${ico("x")}</button>`
+      : `<button class="tab tab-add" id="btnNewTab" title="New tab: start the next thing said on a new diagram" aria-label="New tab">${ico("plus")}</button>`;
+  }
+
   function renderTabs(fresh = []) {
     const tabs = $("tabs");
     if (!S.board || !S.board.boards.length) { tabs.innerHTML = `<div class="tab on">Whiteboard</div>`; return; }
     tabs.innerHTML = S.board.boards.map((b) => `
       <button class="tab ${b.id === S.viewBoard ? "on" : ""} ${fresh.includes(b.id) ? "new" : ""}" data-id="${esc(b.id)}">
         ${esc(b.title)} <span class="kind-tag">${esc(b.kind)}</span><span class="n">${Object.keys(b.nodes).length}</span>
-      </button>`).join("");
-    tabs.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
+      </button>`).join("") + newTabButton();
+    const add = $("btnNewTab");
+    if (add) add.addEventListener("click", () => send({ cmd: "new_tab", on: !S.newTabPending }));
+    tabs.querySelectorAll(".tab[data-id]").forEach((t) => t.addEventListener("click", () => {
       S.viewBoard = t.dataset.id;
       S.followActive = t.dataset.id === S.board.active;
       renderTabs();
@@ -375,7 +392,7 @@
     div.className = `act${chit ? " chit" : ""}`;
     let body = "";
     if (a.agent === "extractor") {
-      body = `<span class="kind k-${a.kind}">${KIND_LABEL[a.kind] || a.kind}</span>${a.topic_shift ? ` <span class="kind k-shift">topic shift</span>` : ""}
+      body = `<span class="kind k-${a.kind}">${KIND_LABEL[a.kind] || a.kind}</span> ${shiftTag(a.topic_shift, a.possible_shift)}
         ${a.claims && a.claims.length ? `<div class="claims">${a.claims.map(esc).join("<br>")}</div>` : ""}`;
     } else {
       const ops = (a.ops || []).map((o) => `<li>${fmtOp(o)}</li>`).join("");
@@ -441,6 +458,7 @@
     if (!mode || mode === S.serverMode) return;
     S.serverMode = mode;
     renderApprovals(S.approvals);
+    renderTabs();
   }
 
   function renderApprovals(pending = []) {
@@ -526,6 +544,7 @@
     $("btnStart").disabled = running;
     if (status === "paused") setSpeaking(null, false);
     if (mode && mode !== "idle") setMode(mode);
+    if (was !== status) renderTabs();
     renderMeetingHead();
     if (running) S.summaryWriting = false;
     setSummaryItem();

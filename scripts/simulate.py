@@ -53,9 +53,8 @@ def describe(path: Path) -> None:
 async def main(speed: float) -> None:
     s = Session()
     await s.start("live", speed=speed)
-    while s.status != "finished":
+    while s.status != "finished" or not s.run_file:   # saved after the meeting summary is written
         await asyncio.sleep(0.5)
-    await asyncio.sleep(0.2)
     describe(RUNS_DIR / s.run_file)
 
 

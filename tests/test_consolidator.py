@@ -41,7 +41,7 @@ def test_consolidator_prompt_formats_and_reuses_modeller_schema(monkeypatch):
 def fake_agents(monkeypatch, tmp_path):
     calls = {"consolidate": [], "order": []}
 
-    async def extract(meeting, context, utt):
+    async def extract(meeting, context, utt, board=None):
         return CallResult({"kind": "new_info", "claims": [utt["text"]], "refers_to": None, "topic_shift": False}, 1)
 
     async def model(meeting, compact, window, items):
@@ -232,7 +232,7 @@ def test_layout_hints_off_stores_no_plan(fake_agents, monkeypatch):
 
 
 def test_summary_is_written_at_the_end_recorded_and_replayed(fake_agents, monkeypatch):
-    async def extract(meeting, context, utt):   # small talk too: the summary reads the whole conversation
+    async def extract(meeting, context, utt, board=None):   # small talk too: the summary reads the whole conversation
         kind = "chit_chat" if utt["id"] == "u01" else "new_info"
         return CallResult({"kind": kind, "claims": [utt["text"]], "refers_to": None, "topic_shift": False}, 1)
     monkeypatch.setattr(agents, "extract", extract)
@@ -269,7 +269,7 @@ def test_summary_is_written_at_the_end_recorded_and_replayed(fake_agents, monkey
 
 
 def test_no_summary_for_an_empty_meeting(fake_agents, monkeypatch):
-    async def extract(meeting, context, utt):   # nothing but small talk
+    async def extract(meeting, context, utt, board=None):   # nothing but small talk
         return CallResult({"kind": "chit_chat", "claims": [], "refers_to": None, "topic_shift": False}, 1)
     monkeypatch.setattr(agents, "extract", extract)
 
@@ -349,7 +349,7 @@ def test_final_pass_covers_every_changed_board_and_relayouts(fake_agents, monkey
                            "layout": {"direction": "LR", "spine": [n["id"] for n in full["nodes"][:2]],
                                       "placements": [], "groups": []}}, 3)
 
-    async def extract(meeting, context, utt):   # u08 switches to a new diagram
+    async def extract(meeting, context, utt, board=None):   # u08 switches to a new diagram
         return CallResult({"kind": "new_info", "claims": [utt["text"]], "refers_to": None,
                            "topic_shift": utt["id"] == "u08"}, 1)
 
