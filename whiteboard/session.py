@@ -122,6 +122,8 @@ class Session(AgentPipeline, ApprovalGate):
         self.consolidator_task: asyncio.Task | None = None
         self.meaningful_since_consolidation = 0
         self.consolidated: dict[str, str] = {}   # board id -> its shape after the last cleanup pass
+        self.carried_shift: str | None = None    # a topic shift heard in small talk, for the next utterance with content
+        self.new_tab_requested = False           # New tab button: the next utterance with content opens a new board
         self.questions: list[dict] = []
         self.disagreements: list[dict] = []
         self.approvals: list[dict] = []            # destructive ops waiting for a person (ask mode)
@@ -150,6 +152,7 @@ class Session(AgentPipeline, ApprovalGate):
             "feedback_url": FEEDBACK_URL,
             "mic": self.source.public_state() if self.source and self.source.kind == "mic" else None,
             "approval_mode": self.approval_mode, "approvals": self.view_approvals,
+            "new_tab_pending": self.new_tab_requested,
             "bot": self.source.public_state() if isinstance(self.source, AttendeeSource)
                    else {"state": "idle", "error": attendee.config_error(), "bot_name": attendee.BOT_NAME},
         }

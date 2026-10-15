@@ -43,7 +43,9 @@ multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to ano
 
 ## Controls
 
-- Mode toggle (Talk live / Teams meeting), Start, Reset, Feedback, board tabs.
+- Mode toggle (Talk live / Teams meeting), Start, Reset, Feedback, board tabs. A new subject opens its own tab by
+  itself; if it doesn't, click **+** after the tabs and the next thing said starts a new diagram
+  (see [ARCHITECTURE.md](ARCHITECTURE.md#new-topics-new-tabs)).
 - **✨ Tidy** re-lays out the board, **⤢ Fit** fits it to the panel; drag/scroll to pan and zoom. Hover a node for its
   note, status and who changed it.
 - **⚡ Autopilot / ✋ Ask first:** whether the agents may remove nodes on their own or must ask first

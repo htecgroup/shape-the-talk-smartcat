@@ -29,7 +29,7 @@ class FakeWS:
 def fake_pipeline(monkeypatch, tmp_path):
     calls = {"extract": [], "model": [], "meetings": []}
 
-    async def extract(meeting, context, utt):
+    async def extract(meeting, context, utt, board=None):
         calls["extract"].append(utt["text"])
         calls["meetings"].append(meeting)
         kind = "undo" if "scratch that" in utt["text"].lower() else "new_info"

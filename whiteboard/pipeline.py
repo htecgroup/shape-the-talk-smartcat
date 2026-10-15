@@ -25,6 +25,8 @@ ANALYST_EVERY = 4           # meaningful utterances between analyst runs
 WINDOW = 8                  # previous meaningful utterances shown to the modeller
 CONSOLIDATE_EVERY = int(os.getenv("LW_CONSOLIDATE_EVERY", "4"))  # meaningful utterances between cleanup passes; 0 = off
 CONSOLIDATOR_BLOCKED = {"new_board", "switch_board", "undo"}     # the consolidator only edits the active board
+POSSIBLE_SHIFT_MIN_NODES = 3    # a possible topic shift opens a tab only once the current board has this many nodes
+SHIFT_FLAGS = ("topic_shift", "possible_shift")                  # extractor flags that allow a new tab, strongest first
 
 
 class AgentPipeline:
@@ -43,7 +45,7 @@ class AgentPipeline:
         self.pending_event.set()
 
     async def _extract(self, context: list[dict], utt: dict) -> dict:
-        res = await agents.extract(self.meeting, context, utt)
+        res = await agents.extract(self.meeting, context, utt, board=self.board.brief())
         if res.data is None:
             ex = {"kind": "new_info", "claims": [utt["text"]], "refers_to": None, "topic_shift": False,
                   "fallback": True}
@@ -52,13 +54,15 @@ class AgentPipeline:
         self.extractions[utt["id"]] = ex
         await self.emit({"type": "extraction", "id": utt["id"], "kind": ex["kind"],
                          "claims": ex.get("claims", []), "refers_to": ex.get("refers_to"),
-                         "topic_shift": ex.get("topic_shift", False)})
+                         "topic_shift": ex.get("topic_shift", False), "possible_shift": ex.get("possible_shift", False)})
         await self.emit({"type": "activity", "item": {
             "agent": "extractor", "utts": [utt["id"]], "speaker": utt["speaker"],
             "latency_ms": res.latency_ms, "kind": ex["kind"], "claims": ex.get("claims", []),
-            "refers_to": ex.get("refers_to"), "topic_shift": ex.get("topic_shift", False), "error": res.error,
+            "refers_to": ex.get("refers_to"), "topic_shift": ex.get("topic_shift", False),
+            "possible_shift": ex.get("possible_shift", False), "error": res.error,
             "confidence": res.confidence, "tokens": [res.tokens_in, res.tokens_out], "t": self._elapsed()}})
-        log.info("extract %s %-12s %5dms %s", utt["id"], ex["kind"], res.latency_ms,
+        shift = " SHIFT" if ex.get("topic_shift") else " shift?" if ex.get("possible_shift") else ""
+        log.info("extract %s %-12s %5dms%s %s", utt["id"], ex["kind"], res.latency_ms, shift,
                  "; ".join(ex.get("claims", []))[:120])
         return ex
 
@@ -91,15 +95,28 @@ class AgentPipeline:
             log.exception("modeller worker crashed")
 
     def _next_batch(self) -> list[dict]:
-        """Take the finished extractions at the head of the queue (at most MAX_BATCH); drop chit-chat."""
+        """Take the finished extractions at the head of the queue (at most MAX_BATCH); drop chit-chat.
+
+        A topic shift heard in small talk ("okay, next topic", "Filip, you can continue") is not lost with it: the
+        flag is carried to the next utterance with content (so is one the modeller drew nothing for, _keep_shift). A person's request for a new tab (New tab button) rides
+        on the first utterance of every batch until a new board is open."""
         batch = []
         while self.pending and self.pending[0][1].done() and len(batch) < MAX_BATCH:
             batch.append(self.pending.pop(0))
         items = []
         for utt, task in batch:
             ex = task.result()
-            if ex["kind"] != "chit_chat":
-                items.append({"utt": utt, "extraction": ex})
+            if ex["kind"] == "chit_chat":
+                flag = next((f for f in SHIFT_FLAGS if ex.get(f)), None)
+                if flag and (self.carried_shift is None or SHIFT_FLAGS.index(flag) < SHIFT_FLAGS.index(self.carried_shift)):
+                    self.carried_shift = flag
+                continue
+            if self.carried_shift and not any(ex.get(f) for f in SHIFT_FLAGS[:SHIFT_FLAGS.index(self.carried_shift) + 1]):
+                ex = {**ex, self.carried_shift: True, "shift_carried": True}
+            self.carried_shift = None
+            items.append({"utt": utt, "extraction": ex})
+        if items and self.new_tab_requested:
+            items[0] = {**items[0], "extraction": {**items[0]["extraction"], "new_tab_requested": True}}
         return items
 
     async def _finish_meeting(self) -> None:
@@ -121,6 +138,7 @@ class AgentPipeline:
         self._kick_analyst(force=True)
         if self.analyst_task:
             await self.analyst_task
+        self.new_tab_requested = False      # nothing more will be said
         self.status = "finished"
         await self.emit_status()
         await self._write_summary()
@@ -170,12 +188,21 @@ class AgentPipeline:
             if isinstance(op, dict) and op.get("src") not in by_lookup:
                 op["src"] = last_id
         ops, guard_rejected = self._modeller_guard(ops, items)
+        asked = any(i["extraction"].get("new_tab_requested") for i in items)   # not a click during this call
+        if asked and ops and not any(isinstance(op, dict) and op.get("op") == "new_board" for op in ops):
+            # a person asked for a new tab and the modeller drew without opening one: open it for them
+            ops.insert(0, {"op": "new_board", "id": self._free_board_id("new_topic"), "title": "New topic",
+                           "kind": "process", "src": items[0]["utt"]["id"]})
         seq = self._approval_seq
         ops, held, refused = self._hold_destructive(ops, "modeller")
         result = self.board.apply_ops(ops, by_lookup=by_lookup)
         result["rejected"] = guard_rejected + refused + result["rejected"]
         summary = (res.data or {}).get("summary") or ("modeller error" if res.error else "")
         await self._emit_board(result, "modeller")
+        if self.new_tab_requested and any(op.get("op") == "new_board" for op in result["applied"]):
+            await self.request_new_tab(False)
+        if not result["applied"]:
+            self._keep_shift(items)
         if self._approval_seq != seq:   # a new proposal (a repeated one is already listed)
             await self._emit_approvals()
         if result["applied"]:
@@ -194,16 +221,22 @@ class AgentPipeline:
         _log_ops(result, held)
 
     def _modeller_guard(self, ops: list, items: list[dict]) -> tuple[list, list]:
-        """Only open a new tab when the extractor saw an explicit topic shift (or when there is no board yet).
-        Weak reasoning settings sometimes open tabs too eagerly. Same for undo: only when the extractor
+        """Only open a new tab when the extractor heard a topic shift, a possible one once the current board has
+        POSSIBLE_SHIFT_MIN_NODES nodes (no tabs of one or two nodes), or a person asked for one (or when there is no
+        board yet). Weak reasoning settings sometimes open tabs too eagerly. Same for undo: only when the extractor
         heard an explicit retraction ("scratch that")."""
-        shift_ok = not self.board.boards or any(i["extraction"].get("topic_shift") for i in items)
-        undo_ok = any(i["extraction"].get("kind") == "undo" for i in items)
+        ex = [i["extraction"] for i in items]
+        active = self.board.boards.get(self.board.active) or {"nodes": {}}
+        shift_ok = (not self.board.boards or any(e.get("topic_shift") or e.get("new_tab_requested") for e in ex)
+                    or (any(e.get("possible_shift") for e in ex) and len(active["nodes"]) >= POSSIBLE_SHIFT_MIN_NODES))
+        undo_ok = any(e.get("kind") == "undo" for e in ex)
         kept, rejected = [], []
         for op in ops:
             name = op.get("op") if isinstance(op, dict) else None
             if name == "new_board" and not shift_ok:
-                rejected.append({"op": op, "error": "new_board: no topic shift detected in this batch"})
+                why = ("the current board is still small" if any(e.get("possible_shift") for e in ex)
+                       else "no topic shift detected in this batch")
+                rejected.append({"op": op, "error": f"new_board: {why}"})
             elif name == "undo" and not undo_ok:
                 rejected.append({"op": op, "error": "undo: nobody retracted anything in this batch"})
             else:
@@ -222,6 +255,31 @@ class AgentPipeline:
         await self.emit(ev)
         if self._prune_approvals():
             await self._emit_approvals()
+
+    def _keep_shift(self, items: list[dict]) -> None:
+        """A batch with a topic shift that changed nothing: a new subject often starts vague ("going on with the
+        bugs"), so the shift waits for the next utterance with content instead of being used up."""
+        flags = [f for f in SHIFT_FLAGS if any(i["extraction"].get(f) for i in items)]
+        if flags and (self.carried_shift is None or SHIFT_FLAGS.index(flags[0]) < SHIFT_FLAGS.index(self.carried_shift)):
+            self.carried_shift = flags[0]
+
+    async def request_new_tab(self, on: bool) -> dict:
+        """New tab button: the next utterance with content starts a new board (on), or never mind (off)."""
+        if on and (self.status != "running" or self.mode not in ("live", "mic", "teams")):
+            return {"ok": False, "error": "A new tab can be asked for during a meeting"}
+        if on and not self.board.boards:
+            return {"ok": False, "error": "The first diagram opens by itself as soon as something is said"}
+        if self.new_tab_requested != on:
+            self.new_tab_requested = on
+            await self.emit({"type": "new_tab", "pending": on}, record=False)
+        return {"ok": True}
+
+    def _free_board_id(self, base: str) -> str:
+        n, bid = 1, base
+        while bid in self.board.boards:
+            n += 1
+            bid = f"{base}_{n}"
+        return bid
 
     # -------------------------------------------------------------- analyst
     def _kick_analyst(self, force: bool = False) -> None:

@@ -12,12 +12,14 @@ utterance source ── ScriptedSource (mock meeting) | MicSource (mic → OpenA
       ▼
 Extractor        one call per utterance, concurrent (Jev by default, or Claude)
                  kind: new_info | correction | disagreement | resolution | question | undo | chit_chat
-                 claims, refers_to, topic_shift                        chit_chat stops here
+                 claims, refers_to, topic_shift (compared with the board on screen)
+                                                                       chit_chat stops here (its topic shift is kept)
       │ in order; a backlog is batched (≤ 6 utterances per call)
       ▼
 Board Modeller   compact board JSON + recent transcript → typed ops
                  (add_node update_node remove_node connect disconnect reroute mark add_group set_group
-                  new_board switch_board undo); server guards: new_board needs topic_shift, undo needs kind=undo
+                  new_board switch_board undo); server guards: new_board needs a topic shift (or the New tab
+                  button), undo needs kind=undo
       ▼
 BoardState       single source of truth: validated, versioned, undo per utterance
       ▲   ├─ Analyst       background, every 4 utterances: open questions, disagreements, closes stale disputes
@@ -37,6 +39,26 @@ rest with a reason (shown struck out in the activity feed). Every op carries the
 fills in the speaker, so attribution can't be wrong. Ops are grouped per utterance, so `undo` reverts exactly what one
 utterance did. A disputed element can only end up `resolved`. A connection to a tab id is mapped to the node it names
 or rejected.
+
+## New topics, new tabs
+
+Each board is about one subject, and a new subject gets its own tab. Three parts decide when:
+
+- **The extractor proposes.** Its topic-shift question gets the board on screen (`BoardState.brief()`: the active
+  board's title, kind and newest node labels, and the other boards' titles), so it asks "does this belong on a
+  different diagram than this one?" rather than "did someone announce a switch?". Real meetings rarely announce it:
+  the next person's update or a new problem just starts. On Jev, p ≥ 0.6 is a topic shift and 0.4-0.6 a possible one.
+- **The modeller decides.** It sees `TOPIC_SHIFT` (open a new board unless the talk clearly continues this one) or
+  `POSSIBLE_TOPIC_SHIFT` (open one only if what is said has nothing to do with this board) on the utterance, and goes
+  back to an earlier board with `switch_board` when the subject is one it already has.
+- **The server guards.** `new_board` needs one of the flags; a possible shift only once the current board has 3 nodes
+  (`POSSIBLE_SHIFT_MIN_NODES`), so it doesn't spawn tabs of one or two nodes. A shift heard in small talk ("okay, next
+  topic", "Filip, you can continue") is carried to the next utterance with content instead of being dropped with it,
+  and so is one the modeller drew nothing for (a new subject often starts vague: "going on with your bugs").
+
+People can also ask for one: the **+** after the tabs (during a meeting) makes the next utterance with content start a
+new board (`{"cmd": "new_tab"}`; the modeller titles it, and if it draws without opening one the server opens a "New
+topic" board for it). The request shows as a dashed tab until the board opens; clicking it cancels.
 
 ## Approval modes
 
