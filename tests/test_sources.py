@@ -237,13 +237,19 @@ def test_mic_vad_commits_and_stop_flushes_last_utterance(fake_pipeline):
     asyncio.run(run())
 
 
-def test_mic_upstream_loss_keeps_interim_text_and_can_reconnect(fake_pipeline):
+def test_mic_upstream_loss_keeps_interim_text_and_can_reconnect(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "RECONNECT_DELAYS_S", (0, 0, 0))
+
     async def run():
         s = Session()
         mic = await start_mic(s)
+        mic.factory = lambda on_event: FakeTranscriber(on_event, fail=True)        # every automatic retry fails
+        n = len(FakeTranscriber.instances)
         await mic.handle_event(delta("it1", "Payment goes through Stripe"))
         await mic.handle_event({"type": "upstream.closed", "code": 1011, "reason": "server error"})
-        assert mic.state == "error" and "1011" in mic.error
+        await wait_for(lambda: mic.state == "error")
+        assert "1011" in mic.error and len(FakeTranscriber.instances) == n + 3
+        mic.factory = lambda on_event: FakeTranscriber(on_event)
         assert [u["text"] for u in s.spoken] == ["Payment goes through Stripe"]   # not lost
         assert s.status == "running"                                                # board survives
         await mic.feed(b"\x01\x00" * 2400)                                          # ignored while in error
@@ -253,6 +259,60 @@ def test_mic_upstream_loss_keeps_interim_text_and_can_reconnect(fake_pipeline):
         assert [u["id"] for u in s.spoken] == ["m001", "m002"]
         await s.reset()                                                             # reset closes upstream
         assert not FakeTranscriber.instances[-1].open
+
+    asyncio.run(run())
+
+
+def test_mic_upstream_drop_reconnects_automatically(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "RECONNECT_DELAYS_S", (0, 0, 0))
+
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        states = []
+
+        async def on_state(st):
+            states.append((st["state"], st["warning"]))
+        mic.on_state = on_state
+        attempts = []
+
+        def factory(on_event):
+            attempts.append(1)
+            return FakeTranscriber(on_event, fail=len(attempts) == 1)              # first retry fails, second works
+        mic.factory = factory
+        await mic.feed(b"\x01\x00" * 24000)
+        await mic.handle_event(delta("it1", "Orders go to the kitchen"))
+        await mic.handle_event({"type": "upstream.closed", "code": 1006, "reason": ""})
+        assert mic.state == "connecting" and mic.warning == sources.RECONNECTING
+        assert [u["text"] for u in s.spoken] == ["Orders go to the kitchen"]
+        await mic.feed(b"\x01\x00" * 2400)                                       # buffered while reconnecting
+        await wait_for(lambda: mic.state == "listening")
+        tr = FakeTranscriber.instances[-1]
+        assert len(attempts) == 2 and tr.open and mic.tr is tr and mic.warning is None
+        assert tr.appended == 4800 and mic._audio_s == 0.1                           # replayed; audio clock rebased
+        assert states == [("connecting", sources.RECONNECTING), ("listening", None)]
+        await mic.handle_event(completed("itX", "Then the waiter brings it."))
+        assert [u["id"] for u in s.spoken] == ["m001", "m002"]                     # ids keep counting
+        assert s.status == "running"
+        await s.reset()
+
+    asyncio.run(run())
+
+
+def test_mic_stop_during_reconnect_cancels_retries(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(sources, "RECONNECT_DELAYS_S", (10, 10, 10))
+
+    async def run():
+        s = Session()
+        mic = await start_mic(s)
+        n = len(FakeTranscriber.instances)
+        await mic.handle_event({"type": "upstream.closed", "code": 1006, "reason": ""})
+        assert mic.state == "connecting"
+        task = mic._reconnecting
+        await mic.stop()
+        assert mic.state == "stopped" and task.done() and mic._reconnecting is None
+        assert len(FakeTranscriber.instances) == n                                 # no retry was made
+        await wait_for(lambda: s.status == "finished")
 
     asyncio.run(run())
 

@@ -132,13 +132,17 @@ class RealtimeTranscriber:
         return self.ws is not None and not self._closing and self.ws.close_code is None
 
     async def append(self, pcm: bytes) -> None:
-        if self.open:
-            await self.ws.send(json.dumps({"type": "input_audio_buffer.append",
-                                           "audio": base64.b64encode(pcm).decode()}))
+        await self._send({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
 
     async def commit(self) -> None:
+        await self._send({"type": "input_audio_buffer.commit"})
+
+    async def _send(self, msg: dict) -> None:
         if self.open:
-            await self.ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            try:
+                await self.ws.send(json.dumps(msg))
+            except websockets.ConnectionClosed:
+                pass                      # the reader reports it as upstream.closed
 
     async def close(self) -> None:
         self._closing = True

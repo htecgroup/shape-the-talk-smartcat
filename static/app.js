@@ -615,7 +615,7 @@
   function onMicState(ev) {
     S.mic = { ...S.mic, ...ev };
     if (ev.state === "error" && ev.error) showMicError(ev.error);
-    else if (ev.state === "listening") showMicError(ev.warning ? `Note: ${ev.warning}` : null);
+    else if (ev.state === "listening" || ev.state === "connecting") showMicError(ev.warning ? `Note: ${ev.warning}` : null);
     if (ev.state === "stopped" || ev.state === "error") S.micOwner = false;
     setStatus(S.status, S.mode, null);
   }

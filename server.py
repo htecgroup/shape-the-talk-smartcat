@@ -303,6 +303,8 @@ async def mic_endpoint(ws: WebSocket, room: str = DEFAULT_ROOM) -> None:
                       text   {"type": "stop"}            flush the last utterance and finish the session
     server -> client  text   {"type": "mic_state", "state": connecting|listening|stopping|stopped|error, "error": ...}
                       text   {"type": "error", "error": "..."}  (start refused)
+    If OpenAI drops mid-talk, the source reconnects on its own: state "connecting" with a warning, then
+    "listening" again, or "error" once the retries fail.
     Transcripts and board updates go to every viewer of the room over /ws. Closing this socket (tab closed)
     stops the mic: the last utterance is flushed and the upstream OpenAI socket is closed.
     """

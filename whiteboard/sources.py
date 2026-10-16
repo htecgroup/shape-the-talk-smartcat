@@ -35,6 +35,8 @@ DEFAULT_TOPIC = ("Not given. Infer what is being designed from what the speaker 
 SPEAKER_COLOR = "#e8590c"
 FLUSH_TIMEOUT_S = 5.0       # how long stop() waits for the last transcript
 PRE_CONNECT_BUFFER_S = 6.0  # audio kept while the upstream socket is still opening
+RECONNECT_DELAYS_S = (1.0, 2.0, 4.0)   # waits before each automatic reconnect after the upstream drops
+RECONNECTING = "Reconnecting to transcription…"
 CHUNK_WORDS = int(os.getenv("LW_MIC_CHUNK_WORDS", str(chunking.CHUNK_WORDS)))   # send a segment every this many stable words
 PAUSE_S = float(os.getenv("LW_MIC_PAUSE_S", str(chunking.PAUSE_S)))           # ... or after this long without a new delta
 
@@ -118,6 +120,7 @@ class MicSource:
         self._commit_marks: list[float] = []   # speech-end wall times of commits awaiting `committed`
         self._since_commit_s = 0.0
         self._last_commit_audio_t = 0.0
+        self._reconnecting: asyncio.Task | None = None
         self.on_state: Callable[[dict], Any] | None = None
         self.stats = {"chunks": 0, "commits": 0}
 
@@ -128,6 +131,7 @@ class MicSource:
 
     async def close(self) -> None:
         """Hard stop (reset): no flush."""
+        await self._stop_reconnect()
         for it in self.items.values():
             it["cap"].cancel()
         if self.tr is not None:
@@ -162,33 +166,66 @@ class MicSource:
     # -------------------------------------------------------------- lifecycle
     async def connect(self) -> bool:
         """Open (or re-open after an error) the upstream transcription session."""
+        self.warning = None
+        await self._set_state("connecting")
+        try:
+            await self._open()
+        except UpstreamError as exc:
+            self._pre.clear()
+            await self._set_state("error", str(exc))
+            return False
+        await self._listen()
+        return True
+
+    async def _open(self) -> None:
+        """A new upstream session, configured by the factory. Raises UpstreamError."""
         if self.tr is not None:
             await self.tr.close()
-        self.vad = EnergyVAD()            # VAD audio time and _audio_s both restart at 0
+        self.vad = EnergyVAD()            # VAD audio time and _audio_s both restart at 0, like the new upstream buffer
         self._audio_s = 0.0
         self._audio_marks.clear()
         self._last_commit_audio_t = 0.0
         self._commit_marks.clear()
         self._since_commit_s = 0.0
-        self.warning = None
-        await self._set_state("connecting")
         self.tr = self.factory(self.handle_event)
-        try:
-            await self.tr.connect()
-        except UpstreamError as exc:
-            self._pre.clear()
-            await self._set_state("error", str(exc))
-            return False
+        await self.tr.connect()
+
+    async def _listen(self) -> None:
         await self._set_state("listening")
         pre, self._pre = self._pre, []
         for chunk in pre:
             await self.feed(chunk)
-        return True
+
+    async def _reconnect(self, msg: str) -> None:
+        """The upstream dropped mid-talk: reopen it with backoff (same board, ids keep counting), else error."""
+        for n, delay in enumerate(RECONNECT_DELAYS_S, 1):
+            await asyncio.sleep(delay)
+            log.info("reconnecting to OpenAI transcription (attempt %d/%d)", n, len(RECONNECT_DELAYS_S))
+            try:
+                await self._open()
+            except UpstreamError as exc:
+                log.warning("reconnect attempt %d failed: %s", n, exc)
+                continue
+            if self.state != "connecting":     # the new socket already dropped
+                return
+            log.info("reconnected after %d attempt(s)", n)
+            self.warning = None
+            await self._listen()
+            return
+        self._pre.clear()
+        await self._set_state("error", msg)
+
+    async def _stop_reconnect(self) -> None:
+        task, self._reconnecting = self._reconnecting, None
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait([task])
 
     async def stop(self) -> None:
         """Flush: commit the audio still in the buffer, wait for the last transcripts, then finish."""
         if self.state in ("stopping", "stopped"):
             return
+        await self._stop_reconnect()           # Stop during an automatic reconnect: no more attempts
         was_listening = self.state == "listening"
         await self._set_state("stopping")
         if was_listening and self.tr is not None and self.tr.open:
@@ -330,7 +367,12 @@ class MicSource:
             log.warning(msg)
             self._commit_marks.clear()
             await self._finalize_open("connection lost")
-            await self._set_state("error", msg)
+            if self.state != "listening":
+                await self._set_state("error", msg)
+                return
+            self.warning = RECONNECTING        # audio is buffered (bounded) while connecting, then replayed
+            await self._set_state("connecting")
+            self._reconnecting = asyncio.create_task(self._reconnect(msg))
 
     async def _advance(self, it: dict) -> None:
         """Cut the head item's text so far: every word but a trailing partial one is stable (deltas only append)."""
