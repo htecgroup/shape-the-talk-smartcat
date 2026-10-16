@@ -37,8 +37,9 @@ Retried webhooks are deduplicated on `idempotency_key`. Transcripts go to the pi
 Teams captions come in spoken order (measured ~0.15 s after Teams finalizes them), so holding them back for
 reordering would only add delay.
 
-When the bot is first in the meeting it posts a short intro in the meeting chat (LW_ATTENDEE_INTRO=0 turns it off,
-LW_ATTENDEE_INTRO_TEXT changes it), so everyone knows a bot listens and why.
+When the bot is first in the meeting it posts a short intro in the meeting chat, so everyone knows a bot listens and
+why. A checkbox on the page turns it off per meeting (LW_ATTENDEE_INTRO sets whether it starts ticked);
+LW_ATTENDEE_INTRO_TEXT changes the text.
 """
 
 from __future__ import annotations
@@ -69,13 +70,13 @@ ATTENDEE_URL = os.getenv("ATTENDEE_URL", "http://localhost:8000").rstrip("/")
 API_KEY = os.getenv("ATTENDEE_API_KEY", "")
 WEBHOOK_SECRET = os.getenv("ATTENDEE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.getenv("LW_PUBLIC_URL", "").rstrip("/")
-BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Klaudije"   # the one default; the page shows what the server sends
+BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Shape The Talk Bot"   # the one default; the page shows what the server sends
 TRANSCRIPTION = os.getenv("LW_ATTENDEE_TRANSCRIPTION", "captions").strip().lower()   # captions | openai
 TEAMS_LANGUAGE = os.getenv("ATTENDEE_TEAMS_LANGUAGE", "").strip()                    # captions language, e.g. en-us
 TEAMS_LOGIN = os.getenv("ATTENDEE_TEAMS_LOGIN", "0").strip() == "1"
-DEFAULT_INTRO = ("Hi everyone, I'm {bot_name}, an AI bot that listens to this meeting and helps you visualize and "
+DEFAULT_INTRO = ("Hi everyone, I'm {bot_name}. I'm an AI that listens to this meeting and helps you visualize and "
                  "track the most important things in it.")
-INTRO = os.getenv("LW_ATTENDEE_INTRO", "1").strip() == "1"                           # chat message when the bot joins
+INTRO = os.getenv("LW_ATTENDEE_INTRO", "1").strip() == "1"     # chat message when the bot joins: the page's checkbox default
 INTRO_TEXT = os.getenv("LW_ATTENDEE_INTRO_TEXT", "").strip() or DEFAULT_INTRO        # {bot_name} = the bot's name
 
 WEBHOOK_PATH = "/api/attendee/webhook"
@@ -109,6 +110,11 @@ def config_error() -> str | None:
     if not WEBHOOK_SECRET:
         return "ATTENDEE_WEBHOOK_SECRET is not set (Attendee dashboard, Settings, Webhooks)"
     return None
+
+
+def intro_message(bot_name: str | None = None) -> str:
+    """The chat intro as the bot sends it (the page shows it next to the checkbox)."""
+    return INTRO_TEXT.replace("{bot_name}", bot_name or BOT_NAME)
 
 
 def teams_meeting(topic: str | None) -> dict:
@@ -159,7 +165,8 @@ class _Caption:
 class AttendeeSource:
     kind = "teams"
 
-    def __init__(self, meeting_url: str, topic: str | None = None, breakout_room: str | None = None) -> None:
+    def __init__(self, meeting_url: str, topic: str | None = None, breakout_room: str | None = None,
+                 intro: bool | None = None) -> None:
         self.meeting_url = meeting_url
         self.breakout_room = (breakout_room or "").strip() or None   # e.g. "Room 4": the bot waits in the main meeting until it opens
         self.topic = topic
@@ -182,6 +189,7 @@ class AttendeeSource:
         self.resumed_at: float | None = None         # when a resume of a paused Attendee opened the gate
         self.control = asyncio.Lock()                # pause / resume calls one at a time
         self.client: httpx2.AsyncClient | None = None
+        self.send_intro = INTRO if intro is None else intro   # the page's checkbox; None: LW_ATTENDEE_INTRO
         self.intro: asyncio.Task | None = None       # the intro chat message, sent once when the bot is first in the meeting
 
     # ---------------------------------------------------------------- source API
@@ -285,7 +293,8 @@ class AttendeeSource:
 
     def public_state(self) -> dict:
         return {"state": self.state, "error": self.error, "bot_name": self.bot_name, "bot_id": self.bot_id,
-                "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening}
+                "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening,
+                "intro": self.send_intro, "intro_default": INTRO, "intro_text": intro_message(self.bot_name)}
 
     async def _set_state(self, state: str, error: str | None = None) -> None:
         if state == "in_meeting" and not self.listening:     # joined paused: shown paused until Resume
@@ -353,7 +362,7 @@ class AttendeeSource:
 
     async def _send_intro(self) -> None:
         """Tell the meeting in the chat who the bot is and why it listens. A failure is only logged."""
-        text = INTRO_TEXT.replace("{bot_name}", self.bot_name)
+        text = intro_message(self.bot_name)
         try:
             res = await self._http().post(f"/api/v1/bots/{self.bot_id}/send_chat_message", json={"message": text})
             if res.status_code >= 400:
@@ -406,7 +415,7 @@ class AttendeeSource:
             if new == "joined_recording":
                 await self._pause_in_attendee()
             # in the call (also when it joined paused): say who it is, once, in the background so webhooks stay cheap
-            if INTRO and new.startswith("joined") and self.intro is None and not self.stopping:
+            if self.send_intro and new.startswith("joined") and self.intro is None and not self.stopping:
                 self.intro = asyncio.create_task(self._send_intro())
 
     async def _on_transcript(self, data: dict) -> None:

@@ -1,7 +1,8 @@
-"""Exports of the current session: versioned board JSON (for other tools) and Mermaid flowcharts.
+"""Exports of the current session: versioned board JSON (for other tools), Mermaid flowcharts, and the transcript
+and the analyst's questions and disagreements as Markdown.
 
-Pure functions over the board dicts of `BoardState.to_dict()`, so they are easy to test. Node coordinates
-live only in the browser, so neither export carries positions; the PNG/SVG image is made client-side.
+Pure functions over the board dicts of `BoardState.to_dict()` and the session's lists, so they are easy to test.
+Node coordinates live only in the browser, so no export carries positions; the PNG/SVG image is made client-side.
 """
 
 from __future__ import annotations
@@ -95,6 +96,53 @@ def all_mermaid(meeting: dict, state: dict) -> str:
     out = [f"# {meeting.get('title') or 'Whiteboard'}\n"]
     for b in state.get("boards", []):
         out.append(f"## {b['title']}\n\n```mermaid\n{board_mermaid(b)}```\n")
+    return "\n".join(out)
+
+
+# ------------------------------------------------------------- Markdown
+def transcript_markdown(meeting: dict, transcript: list[dict]) -> str:
+    """The finished utterances, small talk too. Talk live and Teams send speech in pieces, so a speaker's pieces in a
+    row are joined into one paragraph."""
+    out = [f"# {meeting.get('title') or 'Meeting'}: transcript\n"]
+    people = [p["name"] for p in meeting.get("participants", [])]   # roles say nothing in Teams ("Meeting participant")
+    if people:
+        out.append(f"Participants: {', '.join(people)}\n")
+    turns: list[tuple[str, list[str]]] = []
+    for u in transcript:
+        if not u.get("done") or not u.get("text", "").strip():
+            continue
+        if turns and turns[-1][0] == u["speaker"]:
+            turns[-1][1].append(u["text"].strip())
+        else:
+            turns.append((u["speaker"], [u["text"].strip()]))
+    out += [f"**{who}:** {' '.join(texts)}\n" for who, texts in turns]
+    return "\n".join(out)
+
+
+def questions_markdown(meeting: dict, questions: list[dict], disagreements: list[dict]) -> str:
+    """The analyst's lists as the panel shows them: open, parked and answered questions, open and resolved
+    disagreements, each with who raised it."""
+    out = [f"# {meeting.get('title') or 'Meeting'}: open questions\n"]
+
+    def asked(q: dict) -> str:
+        return f"- {q['question']}" + (f" (asked by {q['asked_by']})" if q.get("asked_by") else "")
+
+    for status, heading in (("open", "Open questions"), ("parked", "Parked questions"), ("answered", "Answered")):
+        qs = [q for q in questions if q.get("status", "open") == status]
+        if qs:
+            out.append(f"## {heading}\n")
+            out.append("\n".join(asked(q) + (f"\n  - Answer: {q['answer']}" if q.get("answer") else "")
+                                 for q in qs) + "\n")
+    for status, heading in (("open", "Open disagreements"), ("resolved", "Resolved disagreements")):
+        ds = [d for d in disagreements if d.get("status", "open") == status]
+        if ds:
+            out.append(f"## {heading}\n")
+            out.append("\n".join(f"- **{d['topic']}**"
+                                 + "".join(f"\n  - {p['who']}: {p['position']}" for p in d.get("positions", []))
+                                 + (f"\n  - Resolved: {d['resolution']}" if d.get("resolution") else "")
+                                 for d in ds) + "\n")
+    if len(out) == 1:
+        out.append("No questions or disagreements.\n")
     return "\n".join(out)
 
 

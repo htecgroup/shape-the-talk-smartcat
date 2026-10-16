@@ -11,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import server  # noqa: E402
 from test_sources import FakeWS, fake_pipeline, wait_for  # noqa: E402,F401
 from whiteboard import attendee, recording  # noqa: E402
 from whiteboard.attendee import AttendeeSource, aligned_end, next_cut, sign_payload, verify_signature  # noqa: E402
@@ -128,10 +129,14 @@ def test_start_needs_config_and_a_link(fake_pipeline, monkeypatch):
     asyncio.run(run())
 
 
-def test_idle_bot_status_carries_the_configured_name(fake_pipeline, monkeypatch):
+def test_idle_bot_status_carries_the_configured_name_and_intro(fake_pipeline, monkeypatch):
     monkeypatch.setattr(attendee, "BOT_NAME", "Klaudije Antropić")
+    monkeypatch.setattr(attendee, "INTRO", False)
+    monkeypatch.setattr(attendee, "INTRO_TEXT", "I'm {bot_name}.")
     bot = Session().snapshot()["bot"]
-    assert bot["state"] == "idle" and bot["bot_name"] == "Klaudije Antropić"
+    assert bot["state"] == "idle" and bot["bot_name"] == "Klaudije Antropić" and bot["intro"] is False
+    assert bot["intro_default"] is False
+    assert bot["intro_text"] == "I'm Klaudije Antropić."              # shown next to the checkbox
 
 
 def test_create_bot_request(teams, monkeypatch):
@@ -390,6 +395,32 @@ def test_intro_can_be_turned_off_or_changed(teams, monkeypatch):
     monkeypatch.setattr(attendee, "INTRO", True)
     monkeypatch.setattr(attendee, "INTRO_TEXT", "{bot_name} is here to draw.")
     assert asyncio.run(joined(Session(), "s2")) == [{"message": f"{attendee.BOT_NAME} is here to draw."}]
+
+
+def test_the_page_checkbox_overrides_the_intro_setting(teams, monkeypatch):
+    intro = f"/api/v1/bots/{BOT}/send_chat_message"
+
+    async def joined(key, **start):
+        res = await server.handle_command({"cmd": "start", "mode": "teams",
+                                           "meeting_url": "https://teams.microsoft.com/l/meetup-join/x", **start})
+        assert res["ok"], res
+        src = server.rooms[server.DEFAULT_ROOM].source
+        await wait_for(lambda: src.bot_id == BOT)
+        await src.handle_webhook(state("joined_recording", key))
+        await asyncio.sleep(0.05)
+        sent = [body for url, body in teams["http"].calls if url == intro]
+        assert src.public_state()["intro"] == bool(sent)
+        assert src.public_state()["intro_default"] is attendee.INTRO   # the page's default, not this meeting's choice
+        teams["http"].calls.clear()
+        await server.rooms[server.DEFAULT_ROOM].reset(broadcast=False)
+        return bool(sent)
+
+    monkeypatch.setattr(server, "rooms", {})
+    assert asyncio.run(joined("s1", intro=True)) is True                  # ticked, although LW_ATTENDEE_INTRO=0
+    assert asyncio.run(joined("s2")) is False                             # no choice sent: the setting
+    monkeypatch.setattr(attendee, "INTRO", True)
+    assert asyncio.run(joined("s3", intro=False)) is False                # unticked
+    assert asyncio.run(joined("s4", intro="no")) is True                  # not a bool: the setting
 
 
 def test_failed_intro_does_not_stop_the_meeting(teams, monkeypatch):

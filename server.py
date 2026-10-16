@@ -171,6 +171,25 @@ async def export_mermaid(room: str = DEFAULT_ROOM) -> PlainTextResponse:
                              headers=_attachment(f"{export.slug(s.meeting.get('title'))}-mermaid.md"))
 
 
+@app.get("/api/export/transcript.md", response_model=None)
+async def export_transcript(room: str = DEFAULT_ROOM) -> PlainTextResponse | JSONResponse:
+    s = await get_session(room)
+    if not any(u.get("done") for u in s.view_transcript):
+        return JSONResponse({"ok": False, "error": "nothing has been said yet, the transcript is empty"}, 400)
+    return PlainTextResponse(export.transcript_markdown(s.meeting, s.view_transcript), media_type="text/markdown",
+                             headers=_attachment(f"{export.slug(s.meeting.get('title'))}-transcript.md"))
+
+
+@app.get("/api/export/questions.md", response_model=None)
+async def export_questions(room: str = DEFAULT_ROOM) -> PlainTextResponse | JSONResponse:
+    s = await get_session(room)
+    if not s.questions and not s.disagreements:
+        return JSONResponse({"ok": False, "error": "no open questions or disagreements yet"}, 400)
+    return PlainTextResponse(export.questions_markdown(s.meeting, s.questions, s.disagreements),
+                             media_type="text/markdown",
+                             headers=_attachment(f"{export.slug(s.meeting.get('title'))}-questions.md"))
+
+
 @app.post("/api/export/spec")
 async def export_spec(room: str = DEFAULT_ROOM) -> JSONResponse:
     s = await get_session(room)
@@ -198,7 +217,8 @@ async def handle_command(msg: dict, room: str = DEFAULT_ROOM) -> dict:
             return {"ok": False, "error": "talk-live sessions start over /ws/mic (they need an audio stream)"}
         return await s.start(msg.get("mode", "live"), msg.get("run"), msg.get("speed"),
                              topic=msg.get("topic"), meeting_url=msg.get("meeting_url"),
-                             breakout_room=msg.get("breakout_room"))
+                             breakout_room=msg.get("breakout_room"),
+                             intro=msg["intro"] if isinstance(msg.get("intro"), bool) else None)
     if cmd == "stop":
         await s.stop_meeting()
     elif cmd == "pause":

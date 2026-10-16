@@ -218,6 +218,24 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mic-fields input { font: inherit; font-size: 13px; font-weight: 400; padding: 6px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
 .mic-fields input:focus { outline: 3px solid rgba(245, 132, 31, .25); border-color: var(--orange); }
 .mic-fields input:disabled { background: var(--hover); color: var(--ink-2); }
+.mic-fields label.check { flex-direction: row; align-items: center; gap: 7px; font-weight: 400; cursor: pointer; }
+.check-row { display: flex; align-items: center; gap: 4px; }
+.info-wrap { position: relative; display: inline-flex; }
+.info { display: flex; padding: 2px; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.info:hover, .info[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
+.info .i { margin: 0; width: 15px; height: 15px; }
+/* the intro text: a dark bubble above the "i" on hover or keyboard focus, kept open by a click (.open); right-aligned
+   to the icon, as the panel's edge would cut off a centred one */
+.info-pop {
+  display: none; position: absolute; right: -10px; bottom: calc(100% + 8px); z-index: 30; width: 260px; padding: 9px 11px;
+  border-radius: 9px; background: #24203a; color: #fff; font-size: 12px; font-weight: 400; line-height: 1.45;
+  box-shadow: 0 6px 18px rgba(14, 19, 80, .25);
+}
+.info-pop::after { content: ""; position: absolute; top: 100%; right: 12px; border: 6px solid transparent; border-top-color: #24203a; }
+.info-wrap:hover .info-pop, .info-wrap.open .info-pop, .info:focus-visible + .info-pop { display: block; }
+.info-title { margin-bottom: 2px; font-weight: 600; color: #c9c2fb; }
+.info-pop p { margin: 0; }
+.mic-fields label.check input { margin: 0; padding: 0; width: 14px; height: 14px; accent-color: var(--orange); cursor: pointer; }
 .field { position: relative; display: flex; }
 .field input { flex: 1; min-width: 0; padding-right: 30px; }
 .field-clear { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: flex; padding: 3px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
@@ -303,8 +321,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .export-menu button:hover:not(:disabled) { background: var(--hover); }
 .export-menu button:disabled { color: var(--muted); cursor: default; }
-.export-menu button span { color: var(--muted); font-size: 11px; align-self: center; }
-.export-menu button b { font-weight: inherit; display: inline-flex; align-items: center; }
+.export-menu button span { color: var(--muted); font-size: 11px; align-self: center; white-space: nowrap; }
+.export-menu button b { font-weight: inherit; display: inline-flex; align-items: center; white-space: nowrap; }
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(14, 19, 80, .35); }
 .modal-card {
   display: flex; flex-direction: column; width: min(860px, 100%); max-height: min(86vh, 100%);
