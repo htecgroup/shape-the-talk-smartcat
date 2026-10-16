@@ -92,6 +92,7 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 | `whiteboard/recording.py` | Run files in `runs/`: list, resolve, save with settings and latency |
 | `whiteboard/board.py` | Board state: op validation, application, versioning, undo |
 | `whiteboard/sources.py`, `stt.py`, `audio.py` | Utterance sources, OpenAI realtime transcription, PCM/resampler/VAD |
+| `whiteboard/language.py` | Meeting languages (English, Serbian): transcription and captions language, Cyrillic to Latin, the agents' LANGUAGE note |
 | `whiteboard/attendee.py` | Teams source: creates/leaves the Attendee bot, verifies webhook signatures, turns webhooks into utterances and participants |
 | `whiteboard/agents/` | One module per agent (`extractor`, `extractor_jev`, `modeller`, `consolidator`, `analyst`), plus `llm.py`, `schemas.py`, `settings.py` |
 | `whiteboard/agents/prompts/` | Prompt texts only, one module per agent |
@@ -111,5 +112,5 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 - **Chunked utterances:** talk live and Teams send a running transcript in pieces (sentence ends, every 6 words, short
   pauses), so a sentence can reach the agents split; the modeller and consolidator repair the board when the rest arrives.
 - **Batching:** when utterances arrive faster than the modeller, an utterance retracted within the same batch is never drawn.
-- **Rooms, not accounts:** anyone with a room's link can watch and control its board; no auth, English only. Rooms
+- **Rooms, not accounts:** anyone with a room's link can watch and control its board; no auth, English or Serbian (one per meeting). Rooms
   live in memory (a restart empties them) and one server process holds them all.

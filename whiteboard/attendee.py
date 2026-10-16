@@ -58,6 +58,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx2
 
+from . import language
 from .chunking import CLAUSE_END, PAUSE_MIN_WORDS, _norm, aligned_end, next_cut  # noqa: F401 (shared with talk live)
 from .sources import DEFAULT_TOPIC, is_meaningless
 
@@ -72,7 +73,7 @@ WEBHOOK_SECRET = os.getenv("ATTENDEE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.getenv("LW_PUBLIC_URL", "").rstrip("/")
 BOT_NAME = os.getenv("LW_ATTENDEE_BOT_NAME", "").strip() or "Shape The Talk Bot"   # the one default; the page shows what the server sends
 TRANSCRIPTION = os.getenv("LW_ATTENDEE_TRANSCRIPTION", "captions").strip().lower()   # captions | openai
-TEAMS_LANGUAGE = os.getenv("ATTENDEE_TEAMS_LANGUAGE", "").strip()                    # captions language, e.g. en-us
+TEAMS_LANGUAGE = os.getenv("ATTENDEE_TEAMS_LANGUAGE", "").strip()   # captions language of English meetings, e.g. en-gb
 TEAMS_LOGIN = os.getenv("ATTENDEE_TEAMS_LOGIN", "0").strip() == "1"
 DEFAULT_INTRO = ("Hi everyone, I'm {bot_name}. I'm an AI that listens to this meeting and helps you visualize and "
                  "track the most important things in it.")
@@ -98,6 +99,9 @@ BOT_STATES = {"ready": "joining", "staged": "joining", "scheduled": "joining", "
               "post_processing": "ended", "ended": "ended", "data_deleted": "ended", "fatal_error": "error"}
 # Attendee leaves after this long without hearing anything (default 10 min). A paused bot hears nothing, so allow long pauses.
 SILENCE_TIMEOUT_S = 70 * 60
+# Teams has one captions language for the whole meeting, and anyone can change it. When the meeting language sets it,
+# Attendee sets it back for this long (it checks every 15 s), so the bot keeps hearing the language it was given.
+CAPTIONS_LANGUAGE_HOLD_S = 4 * 60 * 60
 FINISHED_STATES = {"post_processing", "ended", "data_deleted", "fatal_error"}   # no more transcript to expect
 
 
@@ -117,10 +121,10 @@ def intro_message(bot_name: str | None = None) -> str:
     return INTRO_TEXT.replace("{bot_name}", bot_name or BOT_NAME)
 
 
-def teams_meeting(topic: str | None) -> dict:
+def teams_meeting(topic: str | None, lang: str | None = None) -> dict:
     topic = (topic or "").strip()[:200]
     return {
-        "id": "teams", "source": "teams",
+        "id": "teams", "source": "teams", "language": language.choose(lang),
         "title": f"Teams meeting: {topic}" if topic else "Teams meeting",
         "topic": topic or DEFAULT_TOPIC,
         "participants": [],             # filled in as people join or speak
@@ -166,8 +170,9 @@ class AttendeeSource:
     kind = "teams"
 
     def __init__(self, meeting_url: str, topic: str | None = None, breakout_room: str | None = None,
-                 intro: bool | None = None) -> None:
+                 intro: bool | None = None, lang: str | None = None) -> None:
         self.meeting_url = meeting_url
+        self.language = language.get(lang)           # what the transcription listens for
         self.breakout_room = (breakout_room or "").strip() or None   # e.g. "Room 4": the bot waits in the main meeting until it opens
         self.topic = topic
         self.session: "Session | None" = None
@@ -294,7 +299,8 @@ class AttendeeSource:
     def public_state(self) -> dict:
         return {"state": self.state, "error": self.error, "bot_name": self.bot_name, "bot_id": self.bot_id,
                 "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening,
-                "intro": self.send_intro, "intro_default": INTRO, "intro_text": intro_message(self.bot_name)}
+                "intro": self.send_intro, "intro_default": INTRO, "intro_text": intro_message(self.bot_name),
+                "language": self.language.code}
 
     async def _set_state(self, state: str, error: str | None = None) -> None:
         if state == "in_meeting" and not self.listening:     # joined paused: shown paused until Resume
@@ -314,7 +320,10 @@ class AttendeeSource:
 
     def _transcription_settings(self) -> dict:
         if TRANSCRIPTION == "openai":      # per-speaker audio where the platform allows it; needs an OpenAI key in Attendee
-            return {"openai": {"model": "gpt-4o-transcribe", "language": "en"}}
+            return {"openai": {"model": "gpt-4o-transcribe", "language": self.language.stt}}
+        if self.language.teams:            # a language Teams must be told (it switches the captions for everyone)
+            return {"meeting_closed_captions": {"teams_language": self.language.teams,
+                                                "teams_language_enforcement_duration_seconds": CAPTIONS_LANGUAGE_HOLD_S}}
         captions = {"teams_language": TEAMS_LANGUAGE} if TEAMS_LANGUAGE else {}
         return {"meeting_closed_captions": captions}
 

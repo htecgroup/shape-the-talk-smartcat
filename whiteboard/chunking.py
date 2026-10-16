@@ -16,6 +16,8 @@ import difflib
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
+from .language import to_latin
+
 if TYPE_CHECKING:
     from .session import Session
 
@@ -169,11 +171,12 @@ class RunningCaption:
             await self.session.emit({"type": "utterance_interim", "id": self.line, "text": rest})
 
 
-FILLER_ONLY = {"", "um", "uh", "hmm", "mm", "mhm", "ah", "oh", "okay", "ok", "so", "yeah", "right"}
+FILLER_ONLY = {"", "um", "uh", "hmm", "mm", "mhm", "ah", "oh", "okay", "ok", "so", "yeah", "right",
+               "ovaj", "znači", "znaci", "dobro", "okej", "aha", "hm", "e", "pa", "da", "eto", "ajde"}   # + Serbian
 
 
 def is_meaningless(text: str) -> bool:
     """Empty transcripts or a lone filler word (VAD noise, a cough) never reach the pipeline."""
-    words = [w.strip(".,!?…-\"' ").lower() for w in text.split()]
+    words = [w.strip(".,!?…-\"' ").lower() for w in to_latin(text).split()]
     words = [w for w in words if w]
     return not words or (len(words) == 1 and words[0] in FILLER_ONLY)

@@ -30,7 +30,6 @@ STT_MODEL = os.getenv("LW_STT_MODEL", "gpt-live-transcribe")
 LOCAL_VAD_MODELS = {"gpt-live-transcribe", "gpt-realtime-whisper"}
 NO_PROMPT_MODELS = {"gpt-realtime-whisper", "gpt-4o-transcribe-diarize"}
 NOISE_REDUCTION = os.getenv("LW_STT_NOISE_REDUCTION", "far_field")   # near_field | far_field | none
-LANGUAGE = os.getenv("LW_STT_LANGUAGE", "en")
 SERVER_VAD_SILENCE_MS = int(os.getenv("LW_VAD_SILENCE_MS", "700"))
 
 # errors that do not break the session (e.g. a stop right after a commit)
@@ -44,10 +43,10 @@ def segmentation_for(model: str) -> str:
     return "local" if model in LOCAL_VAD_MODELS else "server"
 
 
-def session_config(model: str, segmentation: str, prompt: str | None = None) -> dict:
+def session_config(model: str, segmentation: str, prompt: str | None = None, language: str | None = "en") -> dict:
     transcription: dict = {"model": model}
-    if LANGUAGE:
-        transcription["language"] = LANGUAGE
+    if language:                        # the meeting language (whiteboard/language.py)
+        transcription["language"] = language
     if prompt and model not in NO_PROMPT_MODELS:
         transcription["prompt"] = prompt
     audio_in: dict = {
@@ -73,8 +72,9 @@ class RealtimeTranscriber:
     """
 
     def __init__(self, on_event: Callable[[dict], Awaitable[None]], model: str = STT_MODEL,
-                 prompt: str | None = None) -> None:
+                 prompt: str | None = None, language: str | None = "en") -> None:
         self.model = model
+        self.language = language
         self.segmentation = segmentation_for(model)
         self.prompt = prompt
         self.on_event = on_event
@@ -92,7 +92,7 @@ class RealtimeTranscriber:
                 ping_interval=20, ping_timeout=20), timeout)
         except Exception as exc:  # never include headers in the message
             raise UpstreamError(f"could not connect to OpenAI realtime: {type(exc).__name__}") from None
-        await self.ws.send(json.dumps(session_config(self.model, self.segmentation, self.prompt)))
+        await self.ws.send(json.dumps(session_config(self.model, self.segmentation, self.prompt, self.language)))
         # wait until the session is configured, so a bad model name fails here and not mid-speech
         try:
             while True:

@@ -87,6 +87,7 @@
         <div class="mic-fields">
           <label>Your name<input id="micName" maxlength="40" placeholder="You" autocomplete="off"></label>
           <label>What are we designing? <span class="opt">optional</span><input id="micTopic" maxlength="200" placeholder="e.g. mobile ordering for a coffee shop" autocomplete="off"></label>
+          <label>Spoken language<select id="micLang" class="lang-select"></select></label>
         </div>
         <div class="mic-row">
           <span class="rec" id="micRec"><span class="dot"></span><span id="micStateText">Mic off</span></span>
@@ -94,12 +95,13 @@
           <button id="btnMute" class="btn ghost tiny" title="Mute your mic while others talk (M)" hidden><svg class="i"><use href="#i-mic-off"/></svg>Mute</button>
         </div>
         <div class="mic-err" id="micErr" hidden></div>
-        <div class="mic-hint" id="micHint">Speak in English, in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>
+        <div class="mic-hint" id="micHint">Speak in short thoughts with small pauses. Corrections ("actually, no…") and "scratch that" update the board.</div>
       </div>
       <div class="micbox" id="teamsBox" hidden>
         <div class="mic-fields" id="teamsFields">
           <label>Teams meeting link<span class="field"><input id="teamsUrl" placeholder="https://teams.microsoft.com/l/meetup-join/…" autocomplete="off" spellcheck="false"><button type="button" class="field-clear" id="teamsUrlClear" title="Clear the link" aria-label="Clear the link" hidden><svg class="i"><use href="#i-x"/></svg></button></span></label>
           <label>Breakout room <span class="opt">optional</span><input id="teamsRoom" maxlength="100" placeholder="e.g. Room 4 (the bot moves there when it opens)" autocomplete="off" spellcheck="false"></label>
+          <label>Spoken language<select id="teamsLang" class="lang-select" title="Sets the Teams captions to this language for everyone in the meeting"></select></label>
           <div class="check-row">
             <label class="check"><input type="checkbox" id="teamsIntro">Introduce the bot in the meeting chat</label>
             <span class="info-wrap">

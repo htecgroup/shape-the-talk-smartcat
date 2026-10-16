@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 import time
 
+from .language import ascii_fold
+
 FORMAT = "shape-the-talk/board"
 VERSION = 1
 
@@ -147,4 +149,4 @@ def questions_markdown(meeting: dict, questions: list[dict], disagreements: list
 
 
 def slug(text: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (text or "whiteboard").lower()).strip("-") or "whiteboard"
+    return re.sub(r"[^a-z0-9]+", "-", ascii_fold(text or "whiteboard").lower()).strip("-") or "whiteboard"

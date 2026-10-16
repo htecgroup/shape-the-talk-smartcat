@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from .. import language
 from .context import line, participants
 from .llm import CallResult, call_json
 from .prompts.spec import SPEC_SYSTEM
@@ -23,6 +24,6 @@ def build_spec_user(transcript: list[dict], boards_full: dict, questions: list, 
 async def generate_spec(meeting: dict, transcript: list[dict], boards_full: dict,
                         questions: list, disagreements: list) -> CallResult:
     system = SPEC_SYSTEM.format(title=meeting["title"], topic=meeting.get("topic") or "",
-                                participants=participants(meeting))
+                                participants=participants(meeting)) + language.prompt_note(meeting)
     user = build_spec_user(transcript, boards_full, questions, disagreements)
     return await call_json("spec", system, user, SPEC_SCHEMA, SPEC_EFFORT, timeout=SPEC_TIMEOUT)
