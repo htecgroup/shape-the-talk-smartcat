@@ -294,7 +294,7 @@ class AttendeeSource:
     def public_state(self) -> dict:
         return {"state": self.state, "error": self.error, "bot_name": self.bot_name, "bot_id": self.bot_id,
                 "transcription": TRANSCRIPTION, "breakout_room": self.breakout_room, "listening": self.listening,
-                "intro": self.send_intro, "intro_text": intro_message(self.bot_name)}
+                "intro": self.send_intro, "intro_default": INTRO, "intro_text": intro_message(self.bot_name)}
 
     async def _set_state(self, state: str, error: str | None = None) -> None:
         if state == "in_meeting" and not self.listening:     # joined paused: shown paused until Resume

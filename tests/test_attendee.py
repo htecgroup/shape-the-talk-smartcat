@@ -135,6 +135,7 @@ def test_idle_bot_status_carries_the_configured_name_and_intro(fake_pipeline, mo
     monkeypatch.setattr(attendee, "INTRO_TEXT", "I'm {bot_name}.")
     bot = Session().snapshot()["bot"]
     assert bot["state"] == "idle" and bot["bot_name"] == "Klaudije Antropić" and bot["intro"] is False
+    assert bot["intro_default"] is False
     assert bot["intro_text"] == "I'm Klaudije Antropić."              # shown next to the checkbox
 
 
@@ -409,6 +410,7 @@ def test_the_page_checkbox_overrides_the_intro_setting(teams, monkeypatch):
         await asyncio.sleep(0.05)
         sent = [body for url, body in teams["http"].calls if url == intro]
         assert src.public_state()["intro"] == bool(sent)
+        assert src.public_state()["intro_default"] is attendee.INTRO   # the page's default, not this meeting's choice
         teams["http"].calls.clear()
         await server.rooms[server.DEFAULT_ROOM].reset(broadcast=False)
         return bool(sent)

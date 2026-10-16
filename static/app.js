@@ -22,6 +22,7 @@
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
     utts: new Map(), activity: [], paused: false,
+    teamsIntro: null,                         // this browser's intro checkbox choice, "1" / "0"
     listed: 0,                                // questions + disagreements the analyst lists
     source: "idle",                           // what the current meeting is: idle (none yet) | scripted | mic | teams
     meetingTitle: "",  // the server's title, used in export filenames
@@ -185,7 +186,7 @@
       <div><div class="who">${esc(u.speaker)} <span class="uid">${u.id}</span><span class="kinds"></span></div>
       <div class="text">${body}</div></div>`;
     $("transcript").appendChild(div);
-    const entry = { el: div, words: [...div.querySelectorAll(".w")], shown: animate ? 0 : words.length, timer: null, speaker: u.speaker, live: !!u.live };
+    const entry = { el: div, words: [...div.querySelectorAll(".w")], shown: animate ? 0 : words.length, timer: null, speaker: u.speaker, live: !!u.live, done: !!u.done };
     S.utts.set(u.id, entry);
     scrollTranscript();
     return entry;
@@ -226,6 +227,7 @@
 
   function onUttFinal(id, text) {
     const e = S.utts.get(id); if (!e) return;
+    e.done = true;
     if (e.live) {
       if (text != null) e.el.querySelector(".text").textContent = text;
       e.el.classList.remove("speaking", "interim");
@@ -575,9 +577,9 @@
     $("botErr").hidden = !S.bot.error;
     $("botErr").textContent = S.bot.error || "";
     $("teamsUrl").disabled = $("teamsRoom").disabled = $("teamsIntro").disabled = running;
-    // the intro checkbox: this browser's last choice, else the server's default (LW_ATTENDEE_INTRO)
-    const intro = store.get("lw.teamsIntro");
-    $("teamsIntro").checked = intro ? intro === "1" : S.bot.intro !== false;
+    // the intro checkbox: this browser's last choice (also kept in S, storage may be blocked), else LW_ATTENDEE_INTRO
+    const intro = S.teamsIntro ?? store.get("lw.teamsIntro");
+    $("teamsIntro").checked = intro ? intro === "1" : S.bot.intro_default !== false;
     $("introText").textContent = S.bot.intro_text || "";
     syncUrlClear();
     // once the bot is on its way the panel shrinks to the status row and Stop; the link comes back afterwards
@@ -705,7 +707,10 @@
     syncUrlClear();
     $("teamsUrl").focus();
   });
-  $("teamsIntro").addEventListener("change", (e) => store.set("lw.teamsIntro", e.target.checked ? "1" : "0"));
+  $("teamsIntro").addEventListener("change", (e) => {
+    S.teamsIntro = e.target.checked ? "1" : "0";
+    store.set("lw.teamsIntro", S.teamsIntro);
+  });
   // the "i" next to it shows the intro text on hover; a click keeps it open until Escape or a click elsewhere
   function pinIntro(on) {
     $("introInfo").closest(".info-wrap").classList.toggle("open", on);
@@ -786,7 +791,7 @@
     // The transcript and the questions need something said or asked first.
     const empty = !$("boardEmpty").classList.contains("hide");
     $("exportMenu").querySelectorAll("[data-export]").forEach((b) => {
-      b.disabled = (b.dataset.export === "png" && empty) || (b.dataset.export === "transcript" && !S.utts.size)
+      b.disabled = (b.dataset.export === "png" && empty) || (b.dataset.export === "transcript" && ![...S.utts.values()].some((u) => u.done))
         || (b.dataset.export === "questions" && !S.listed);
     });
     if (spec.busy) $("btnSpec").disabled = true;
