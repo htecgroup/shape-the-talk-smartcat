@@ -211,6 +211,8 @@ async def handle_command(msg: dict, room: str = DEFAULT_ROOM) -> dict:
         await s.set_speed(float(msg.get("speed", 1)))
     elif cmd == "reset":
         await s.reset()
+    elif cmd == "new_tab":
+        return await s.request_new_tab(bool(msg.get("on", True)))
     elif cmd == "approval_mode":
         return await s.set_approval_mode(msg.get("mode"))
     elif cmd == "approval":

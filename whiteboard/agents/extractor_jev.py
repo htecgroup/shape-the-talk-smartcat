@@ -22,14 +22,27 @@ from .schemas import KINDS
 log = logging.getLogger("agents")
 
 JEV_REFERS_KINDS = {"correction", "disagreement", "resolution", "undo"}
-JEV_TOPIC_SHIFT_THRESHOLD = 0.5
+JEV_TOPIC_SHIFT_THRESHOLD = 0.6       # p of topic_shift from which it is a shift
+JEV_POSSIBLE_SHIFT_THRESHOLD = 0.4    # from here up to a shift: a possible one, the modeller decides with the board
 
 
-def build_jev_request(meeting: dict, context: list[dict], utt: dict) -> tuple[dict, dict]:
-    """state + questions (kind, refers_to, topic_shift) for one Jev System One call."""
+def board_line(b: dict | None) -> str:
+    """The shown board as one line for the topic-shift question: title (kind): newest node labels."""
+    if not b:
+        return "none yet"
+    return f'{b["title"]} ({b["kind"]}): ' + (", ".join(b["nodes"]) or "no nodes yet")
+
+
+def build_jev_request(meeting: dict, context: list[dict], utt: dict,
+                      board: dict | None = None) -> tuple[dict, dict]:
+    """state + questions (kind, refers_to, topic_shift) for one Jev System One call. `board`: BoardState.brief(),
+    so the topic-shift question compares the utterance with the diagram on screen, not only with the last lines."""
     ctx = context[-6:]
+    board = board or {"current": None, "others": []}
     state: dict[str, Any] = {
         "meeting": {"title": meeting["title"], "topic": meeting["topic"], "participants": participants(meeting)},
+        "current_board": board_line(board["current"]),
+        "other_boards": board["others"] or ["none"],
         "context": [line(u) for u in ctx],
         "new_utterance": line(utt),
     }
@@ -52,13 +65,14 @@ def jev_to_extraction(utt: dict, kind: str, refers_to: str | None, topic_shift_p
     return {"kind": kind,
             "claims": [] if kind == "chit_chat" else [utt["text"]],
             "refers_to": refers_to if kind in JEV_REFERS_KINDS and refers_to not in (None, "none") else None,
-            "topic_shift": topic_shift_p >= JEV_TOPIC_SHIFT_THRESHOLD}
+            "topic_shift": topic_shift_p >= JEV_TOPIC_SHIFT_THRESHOLD,
+            "possible_shift": JEV_POSSIBLE_SHIFT_THRESHOLD <= topic_shift_p < JEV_TOPIC_SHIFT_THRESHOLD}
 
 
-async def extract_jev(meeting: dict, context: list[dict], utt: dict) -> CallResult:
+async def extract_jev(meeting: dict, context: list[dict], utt: dict, board: dict | None = None) -> CallResult:
     start = time.perf_counter()
     try:
-        state, questions = build_jev_request(meeting, context, utt)
+        state, questions = build_jev_request(meeting, context, utt, board)
         resp = await jev_client().system_one(state=state, questions=questions)
         ms = int((time.perf_counter() - start) * 1000)
         kind = resp.choices["kind"]

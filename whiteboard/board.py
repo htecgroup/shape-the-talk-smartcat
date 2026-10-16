@@ -44,6 +44,7 @@ LAYOUT_DIRECTIONS = {"LR", "TB"}
 LAYOUT_SIDES = {"before", "after", "above", "below"}
 LAYOUT_ORIENTATIONS = {"row", "column"}
 LAYOUT_MAX = 24             # max spine entries / placements / group entries kept
+BRIEF_NODES = 30            # node labels of the active board in brief() (the newest ones)
 
 
 class OpError(ValueError):
@@ -140,6 +141,14 @@ class BoardState:
                     "nodes": [f'{n["id"]} ({n["label"]})' for n in b["nodes"].values()],
                 })
         return out
+
+    def brief(self) -> dict:
+        """What the extractor needs to tell whether an utterance still belongs on the shown diagram: the active
+        board's title, kind and newest node labels, and the titles of the other boards."""
+        b = self.boards.get(self.active) if self.active else None
+        current = {"title": b["title"], "kind": b["kind"],
+                   "nodes": [n["label"] for n in b["nodes"].values()][-BRIEF_NODES:]} if b else None
+        return {"current": current, "others": [self.boards[i]["title"] for i in self.board_order if i != self.active]}
 
     def find_target(self, board_id: str, target: str) -> tuple[str, dict] | None:
         b = self.boards.get(board_id)
