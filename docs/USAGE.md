@@ -24,7 +24,11 @@ The server still supports scripted meetings (`data/meeting_*.json`) for `scripts
    `localhost` or https).
 2. Talk in short thoughts with small pauses. Interim text appears while you speak and goes to the agents in pieces
    while you talk: at a sentence end, every 6 words (`LW_MIC_CHUNK_WORDS`), or after a 0.8 s pause (`LW_MIC_PAUSE_S`). "Actually, no…" corrects the board in place, "scratch that" undoes your last statement.
-3. **■ Stop** flushes the last utterance, runs the final cleanup and analysis, writes the meeting summary and saves the
+3. Talk live takes the mic raw (no echo cancellation, noise suppression or auto gain), so a Teams/Zoom call on the
+   same Mac keeps hearing you: on macOS Chrome's processing isn't limited to the tab, it switches the shared mic into
+   voice-processing mode and turns the system input volume down. The server denoises instead
+   (`LW_STT_NOISE_REDUCTION`). On a call, use headphones, or the others' voices from your speakers get transcribed as yours.
+4. **■ Stop** flushes the last utterance, runs the final cleanup and analysis, writes the meeting summary and saves the
    run to `runs/`.
 
 The OpenAI key never leaves the server: the browser streams audio to `/ws/mic` and the server talks to OpenAI.

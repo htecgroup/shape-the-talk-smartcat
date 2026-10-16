@@ -26,7 +26,9 @@ const Mic = (() => {
     if (!supported()) { h.onError?.("This browser cannot capture audio here (needs getUserMedia + AudioWorklet, and https or localhost)."); return false; }
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        // raw: on macOS Chrome's processing isn't per-tab (it puts the shared mic in voice-processing mode and moves
+        // the OS input volume), which breaks Teams/Zoom on the same mic. The server denoises instead.
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
     } catch (e) { h.onError?.(permissionMessage(e)); return false; }
     try {
