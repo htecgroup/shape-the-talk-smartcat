@@ -5,6 +5,7 @@
 <p align="center"><b>Your meeting draws its own whiteboard.</b><br>
 Hackathon project by <b>Team SmartCat</b></p>
 
+https://github.com/user-attachments/assets/291d32ab-9613-405d-ad08-bd685b26e63c
 ---
 
 ## The problem
