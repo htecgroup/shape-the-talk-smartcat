@@ -12,16 +12,26 @@
  *   board/place.js    stable placement of new nodes
  *   board/tidy.js     the full re-layout (Tidy)
  *   board/routing.js  edge paths round the nodes
+ *   board/simplify.js what is drawn: stubs for far edges into shared sinks
+ *                     (decided at Tidy), one edge to a group instead of one
+ *                     per member
+ *
+ * Overview and detail boards: a summary node (node.detail) opens its detail
+ * board when clicked, a reference node on a detail board (node.ref_board)
+ * opens the overview (opts.onOpenBoard).
  */
 const Board = (() => {
   const { el, key, textW, esc } = BoardSvg;
   const { buildNode, nodeSig, buildEdge } = BoardShapes;
-  const { edgePath, routedPath, clearCache: clearRouteCache } = BoardRouting;
+  const { routeAll, clearCache: clearRouteCache } = BoardRouting;
+  const { view: viewOf, groupBox, groupOf } = BoardSimplify;
 
   let svg, camera, groupsLayer, edgesLayer, nodesLayer, fxLayer, container, rc, tooltip;
   let colorOf = () => "#868e96";
   let onEmptyChange = () => {};
   let layoutSig = () => "";    // what a board's layout depends on (nodes, groups, edges, plan)
+  let onOpenBoard = () => {};  // a summary node / reference node was clicked: show that board
+  let boardInfo = () => null;  // board id -> {title, n} (detail boards: their title and node count)
 
   const pos = new Map();       // "board:node" -> target {x, y}
   const cur = new Map();       // "board:node" -> drawn {x, y}
@@ -32,6 +42,8 @@ const Board = (() => {
   const lastSeen = new Map();  // board id -> board data last rendered
   let shown = null;            // board id currently drawn
   let shownData = null;
+  let shownView = null;        // shownData as drawn (BoardSimplify.view): with stubs, merged group edges
+  const stubsOf = new Map();   // board id -> ids of the edges drawn to a stub (from its last tidy)
   let cam = { x: 0, y: 0, k: 1 }, camT = { x: 0, y: 0, k: 1 };
   let autoFit = true, rafOn = false;
   const tweens = new Map();    // "board:node" -> {x, y, t0}: eased move after a re-layout
@@ -55,6 +67,8 @@ const Board = (() => {
     colorOf = opts.colorOf || colorOf;
     onEmptyChange = opts.onEmptyChange || onEmptyChange;
     layoutSig = opts.layoutSig || layoutSig;
+    onOpenBoard = opts.onOpenBoard || onOpenBoard;
+    boardInfo = opts.boardInfo || boardInfo;
     rc = window.rough ? rough.svg(svg) : null;
     setupPanZoom();
     // the board resizes with the window and when a side panel collapses or expands
@@ -101,14 +115,15 @@ const Board = (() => {
     return Math.max(4, Math.min(8, Math.round(ratio * 3.4)));
   }
 
-  const placeNew = (board) => BoardPlace.placeNew(board, pos, maxCols);
-  const layoutBoard = (board) => BoardTidy.layoutBoard(board, nodeEls, container.getBoundingClientRect());
+  const placeNew = (view) => BoardPlace.placeNew(view, pos, maxCols);
+  const layoutBoard = (board) => BoardSimplify.layout(board, nodeEls, container.getBoundingClientRect());
 
   // ------------------------------------------------------------- tidy
   function tidy(board = shownData) {
     if (!board || board.id !== shown) return;
     const next = layoutBoard(board);
     laidOut.set(board.id, layoutSig(board));
+    stubsOf.set(board.id, next.stubs);
     const now = performance.now();
     for (const [id, p] of next.pos) {
       const k = key(shown, id), c = cur.get(k);
@@ -117,10 +132,15 @@ const Board = (() => {
     }
     // long edges follow their waypoints while both ends stay where tidy put them
     for (const k of [...routes.keys()]) if (k.startsWith(`${shown}:`)) routes.delete(k);
-    for (const [eid, rt] of next.routes) {
-      const e = board.edges[eid];
-      routes.set(key(shown, eid), { pts: rt.pts, rev: rt.rev, poly: rt.poly, a: { ...next.pos.get(e.from) }, b: { ...next.pos.get(e.to) } });
+    const at = (ref) => {
+      const g = groupOf(ref), p = (id) => { const q = next.pos.get(id); return q && { ...q, ...next.size(id) }; };
+      return g ? groupBox(next.view, g, p) : next.pos.get(ref);
+    };
+    for (const e of Object.values(next.view.drawn)) {
+      const rt = BoardSimplify.routeOf(next, e), a = at(e.from), b = at(e.to);
+      if (rt && a && b) routes.set(key(shown, e.id), { ...rt, a: { ...a }, b: { ...b } });
     }
+    render(board, { silent: true });   // the stubs this layout has (and not the old ones)
     autoFit = true; fit();
     camTween = { ...cam, t0: now };   // the camera glides in step with the nodes
     kick();
@@ -136,7 +156,15 @@ const Board = (() => {
     const p = cur.get(key(shown, id)); const ne = nodeEls.get(id);
     if (!p || !ne) return null;
     const t = pos.get(key(shown, id));
-    return { id, x: p.x, y: p.y, w: ne.w, h: ne.h, dir: (t && t.dir) || 1 };
+    return { id, x: p.x, y: p.y, w: ne.w, h: ne.h, dir: (t && t.dir) || 1, type: ne.data.type };
+  }
+  /* An edge end: a node's geom, or a group's box (drawn: where it is now; else where it is going). */
+  function endGeom(ref, drawn = true) {
+    const g = groupOf(ref);
+    if (!g) return drawn ? geom(ref) : pos.get(key(shown, ref));
+    const at = drawn ? geom : (id) => { const p = pos.get(key(shown, id)), ne = nodeEls.get(id); return p && ne && { ...p, w: ne.w, h: ne.h }; };
+    const b = groupBox(shownView, g, at);
+    return b && { ...b, id: ref, type: "group" };
   }
   function nodeBoxes() {
     const boxes = [...nodeEls.keys()].map(geom).filter(Boolean);
@@ -148,16 +176,25 @@ const Board = (() => {
     return boxes;
   }
 
-  function drawEdge(ee, boxes) {
-    const a = geom(ee.data.from), b = geom(ee.data.to);
-    if (!a || !b) { ee.g.style.display = "none"; return; }
-    ee.g.style.display = "";
-    const rt = routes.get(key(shown, ee.data.id));
-    const pa = pos.get(key(shown, ee.data.from)), pb = pos.get(key(shown, ee.data.to));
+  /* All edges at once: routeAll spreads the ends that share a side of a node
+   * and keeps the labels clear of each other. */
+  function drawEdges(boxes) {
     const same = (p, q) => p && q && Math.abs(p.x - q.x) < 1 && Math.abs(p.y - q.y) < 1;
-    const { d, mid } = rt && same(pa, rt.a) && same(pb, rt.b) ? routedPath(a, b, rt, pa, pb) : edgePath(a, b, boxes, key(shown, ee.data.id));
-    ee.line.setAttribute("d", d); ee.glow.setAttribute("d", d);
-    if (ee.labelG) ee.labelG.setAttribute("transform", `translate(${mid.x},${mid.y})`);
+    const list = [];
+    for (const ee of edgeEls.values()) {
+      const a = endGeom(ee.data.from), b = endGeom(ee.data.to);
+      if (!a || !b) { ee.g.style.display = "none"; continue; }
+      ee.g.style.display = "";
+      const rt = routes.get(key(shown, ee.data.id));
+      const pa = endGeom(ee.data.from, false), pb = endGeom(ee.data.to, false);
+      list.push({ id: ee.data.id, a, b, pa, pb, rt: rt && same(pa, rt.a) && same(pb, rt.b) ? rt : null, lw: ee.lw || 0 });
+    }
+    const res = routeAll(list, boxes);
+    for (const { id } of list) {
+      const ee = edgeEls.get(id), { d, label } = res.get(id);
+      ee.line.setAttribute("d", d); ee.glow.setAttribute("d", d);
+      if (ee.labelG) ee.labelG.setAttribute("transform", `translate(${label.x},${label.y})`);
+    }
   }
 
   // ----------------------------------------------------------- render
@@ -172,17 +209,19 @@ const Board = (() => {
    *  - silent: no flashes (tab switch, page load)
    */
   function render(board, opts = {}) {
-    if (!board) { clearAll(); shown = null; shownData = null; onEmptyChange(true); return; }
+    if (!board) { clearAll(); shown = null; shownData = null; shownView = null; onEmptyChange(true); return; }
     const switching = board.id !== shown;
     if (switching) { clearAll(); shown = board.id; autoFit = true; }
-    const prev = switching ? null : shownData;
-    shownData = board;
-    placeNew(board);
+    const prev = switching ? null : shownView;
+    const view = viewOf(board, stubsOf.get(board.id));
+    for (const [id, n] of Object.entries(view.nodes)) if (n.detail) view.nodes[id] = { ...n, detailN: (boardInfo(n.detail) || {}).n || 0 };
+    shownData = board; shownView = view;
+    placeNew(view);
     const silent = opts.silent || switching;
     const flashColor = (item) => colorOf(item.v === opts.version ? item.by : (opts.by || item.by));
 
     // nodes
-    for (const [id, n] of Object.entries(board.nodes)) {
+    for (const [id, n] of Object.entries(view.nodes)) {
       let ne = nodeEls.get(id);
       const k = key(board.id, id);
       const isNew = !ne;
@@ -193,9 +232,12 @@ const Board = (() => {
         if (isNew) {
           const g = el("g", { class: "node enter" }, nodesLayer);
           g.dataset.id = id;
-          g.addEventListener("mouseenter", (ev) => showTip(ev, id));
+          g.addEventListener("mouseenter", (ev) => { showTip(ev, id); pointAt(id, true); });
           g.addEventListener("mousemove", moveTip);
-          g.addEventListener("mouseleave", hideTip);
+          g.addEventListener("mouseleave", () => { hideTip(); pointAt(id, false); });
+          if (n.type === "stub") g.addEventListener("click", () => { pointAt(id, true); setTimeout(() => pointAt(id, false), 1600); });
+          // drill down into a detail board (summary node), or back up to the overview (reference node)
+          g.addEventListener("click", () => { const d = nodeEls.get(id) && nodeEls.get(id).data; if (d && (d.detail || d.ref_board)) { hideTip(); onOpenBoard(d.detail || d.ref_board); } });
           ne = { g, inner, w, h, sig, data: n };
           nodeEls.set(id, ne);
           g.appendChild(inner);
@@ -209,13 +251,13 @@ const Board = (() => {
       ne.data = n;
       // keep transient animation classes (enter/flash); only swap type and status
       const transient = ["enter", "flash"].filter((c) => ne.g.classList.contains(c));
-      ne.g.setAttribute("class", ["node", n.type, n.status, ...(n.done ? ["done"] : []), ...transient,
+      ne.g.setAttribute("class", ["node", n.type, n.status, ...(n.done ? ["done"] : []), ...(n.detail ? ["summary"] : []), ...(n.ref_board ? ["ref"] : []), ...transient,
         ...(pending.has(key(board.id, id)) ? ["pending-remove"] : [])].join(" "));
       const prevN = prev && prev.nodes[id];
       if (!silent && (!prevN || prevN.v !== n.v || nodeSig(prevN) !== nodeSig(n))) flash(ne, flashColor(n));
     }
     for (const [id, ne] of [...nodeEls]) {
-      if (!board.nodes[id]) {
+      if (!view.nodes[id]) {
         nodeEls.delete(id);
         ne.g.classList.add("exit");
         setTimeout(() => ne.g.remove(), 460);
@@ -225,14 +267,14 @@ const Board = (() => {
 
     // edges
     const boxes = nodeBoxes();
-    for (const [id, e] of Object.entries(board.edges)) {
+    for (const [id, e] of Object.entries(view.drawn)) {
       let ee = edgeEls.get(id);
-      const prevE = prev && prev.edges[id];
-      const sig = [e.label, e.status, e.note].join("|");
+      const prevE = prev && prev.drawn[id];
+      const sig = [e.label, e.status, e.note, e.to].join("|");
       if (!ee || ee.sig !== sig) {
         const fresh = buildEdge(e);
         if (ee) edgesLayer.replaceChild(fresh.g, ee.g); else { edgesLayer.appendChild(fresh.g); if (!silent) fresh.g.classList.add("enter"); }
-        ee = { ...fresh, sig };
+        ee = { ...fresh, sig, lw: e.label ? textW(e.label, "13px Kalam") + 10 : 0 };
         edgeEls.set(id, ee);
       }
       ee.data = e;
@@ -241,15 +283,15 @@ const Board = (() => {
         ee.g.classList.remove("flash"); void ee.g.getBoundingClientRect(); ee.g.classList.add("flash");
         setTimeout(() => ee.g.classList.remove("flash"), 3300);
       }
-      drawEdge(ee, boxes);
     }
     for (const [id, ee] of [...edgeEls]) {
-      if (!board.edges[id]) {
+      if (!view.drawn[id]) {
         edgeEls.delete(id);
         ee.g.classList.add("exit");
         setTimeout(() => ee.g.remove(), 460);
       }
     }
+    drawEdges(boxes);
 
     lastSeen.set(board.id, board);
     onEmptyChange(Object.keys(board.nodes).length === 0);
@@ -281,7 +323,7 @@ const Board = (() => {
     const groups = Object.values(shownData.groups || {});
     for (const [gid, ge] of [...groupEls]) if (!shownData.groups[gid]) { ge.remove(); groupEls.delete(gid); }
     for (const g of groups) {
-      const members = Object.values(shownData.nodes).filter((n) => n.group === g.id);
+      const members = Object.values(shownView.nodes).filter((n) => n.group === g.id);   // with the stubs in it
       let ge = groupEls.get(g.id);
       if (!members.length) { if (ge) ge.style.display = "none"; continue; }
       if (!ge) {
@@ -299,8 +341,8 @@ const Board = (() => {
       }
       const r = ge.querySelector("rect"), t = ge.querySelector("text");
       r.setAttribute("x", x0 - 22); r.setAttribute("y", y0 - 36); r.setAttribute("width", x1 - x0 + 44); r.setAttribute("height", y1 - y0 + 58);
-      const done = members.filter((m) => m.done).length;
-      t.setAttribute("x", x0 - 10); t.setAttribute("y", y0 - 18); t.textContent = g.kind === "task_list" ? `☑ ${g.label} · ${done}/${members.length}` : g.label;
+      const items = members.filter((m) => m.type !== "stub"), done = items.filter((m) => m.done).length;
+      t.setAttribute("x", x0 - 10); t.setAttribute("y", y0 - 18); t.textContent = g.kind === "task_list" ? `☑ ${g.label} · ${done}/${items.length}` : g.label;
       // a person's task list: a dotted line from the list box to its owner
       const link = ge.querySelector(".owner-link"), og = g.owner && shownData.nodes[g.owner] ? geom(g.owner) : null;
       if (og) {
@@ -339,7 +381,7 @@ const Board = (() => {
   // --------------------------------------------------------- camera
   function fit() {
     if (!shownData) return;
-    const ids = Object.keys(shownData.nodes);
+    const ids = Object.keys(shownView.nodes);
     const r = container.getBoundingClientRect();
     if (!ids.length || !r.width) { camT = { x: r.width / 2, y: r.height / 2, k: 1 }; kick(); return; }
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -379,7 +421,7 @@ const Board = (() => {
       ne.g.setAttribute("transform", `translate(${c.x},${c.y})`);
     }
     const boxes = nodeBoxes();
-    for (const ee of edgeEls.values()) drawEdge(ee, boxes);
+    drawEdges(boxes);
     drawGroups();
     drawAssignLinks();
     const f = 0.12;
@@ -399,13 +441,31 @@ const Board = (() => {
   function showTip(ev, id) {
     const ne = nodeEls.get(id); if (!ne) return;
     const n = ne.data;
+    if (n.type === "stub") {
+      const t = shownData.nodes[n.ref], e = shownData.edges[n.edge];
+      tooltip.innerHTML = `<div class="tt-title">→ ${esc(t ? t.label : n.label)}</div>
+        <div class="tt-meta">continues at <b>${esc(t ? t.label : n.label)}</b>, drawn once elsewhere on the board${e && e.label ? ` · ${esc(e.label)}` : ""}</div>`;
+      tooltip.hidden = false;
+      moveTip(ev);
+      return;
+    }
+    if (n.ref_board) {
+      const home = boardInfo(n.ref_board);
+      tooltip.innerHTML = `<div class="tt-title">${n.refDir === "out" ? "from" : "→"} ${esc(n.label)}</div>
+        <div class="tt-meta">on the overview${home ? ` <b>${esc(home.title)}</b>` : ""} · click to open it</div>`;
+      tooltip.hidden = false;
+      moveTip(ev);
+      return;
+    }
     const typeName = { actor: "Actor", system: "System", step: "Step", decision: "Decision", data: "Data", task: "Task" }[n.type] || n.type;
+    const detail = n.detail ? boardInfo(n.detail) : null;
     const owner = n.type === "task" ? (n.assignee && shownData.nodes[n.assignee] ? shownData.nodes[n.assignee].label : "unassigned") : null;
     const doneTxt = n.type === "task" ? (n.done ? " · ✓ done" : " · open") : "";
     const statusTxt = { confirmed: "", ghost: " · proposed (not confirmed yet)", disputed: " · DISPUTED", resolved: " · resolved" }[n.status] || "";
     tooltip.innerHTML = `<div class="tt-title">${esc(n.label)}</div>
       <div class="tt-meta">${typeName}${doneTxt}${statusTxt}${owner ? ` · assigned to <b>${esc(owner)}</b>` : ""}</div>
       <div class="tt-meta">last change by <b style="color:${colorOf(n.by)}">${esc(n.by || "?")}</b> · ${esc(n.src || "")}</div>
+      ${detail ? `<div class="tt-meta">▸ detail board <b>${esc(detail.title)}</b> (${detail.n} nodes) · click to open it</div>` : ""}
       ${n.note ? `<div class="tt-note ${n.status}">${esc(n.note)}</div>` : ""}`;
     tooltip.hidden = false;
     moveTip(ev);
@@ -417,6 +477,12 @@ const Board = (() => {
     tooltip.style.left = x + "px"; tooltip.style.top = y + "px";
   }
   function hideTip() { tooltip.hidden = true; }
+  /* A stub points at the node it stands for: highlight that node (and its other stubs) while hovered. */
+  function pointAt(id, on) {
+    const ne = nodeEls.get(id);
+    if (!ne || ne.data.type !== "stub") return;
+    for (const o of nodeEls.values()) if (o.data.id === ne.data.ref || (o.data.type === "stub" && o.data.ref === ne.data.ref)) o.g.classList.toggle("ref-target", on);
+  }
 
   /* Nodes waiting for a removal approval: [{board, targets}] (a merge removes several). They stay drawn, dimmed and struck through. */
   function setPending(items) {
@@ -424,7 +490,7 @@ const Board = (() => {
     for (const [id, ne] of nodeEls) ne.g.classList.toggle("pending-remove", pending.has(key(shown, id)));
   }
 
-  function reset() { clearAll(); pos.clear(); cur.clear(); lastSeen.clear(); stale.clear(); laidOut.clear(); routes.clear(); clearRouteCache(); shown = null; shownData = null; autoFit = true; onEmptyChange(true); }
+  function reset() { clearAll(); pos.clear(); cur.clear(); lastSeen.clear(); stale.clear(); laidOut.clear(); routes.clear(); stubsOf.clear(); clearRouteCache(); shown = null; shownData = null; shownView = null; autoFit = true; onEmptyChange(true); }
 
   return { init, render, tidy: () => tidy(), relayout, relayoutChanged, fit: setAutoFit, reset, setPending, get shown() { return shown; } };
 })();

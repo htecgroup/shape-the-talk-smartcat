@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from whiteboard import agents  # noqa: E402
+from whiteboard import agents, pipeline  # noqa: E402
 from whiteboard.agents import CallResult  # noqa: E402
 from whiteboard.agents.extractor_jev import board_line  # noqa: E402
 from whiteboard.board import BRIEF_NODES, BoardState  # noqa: E402
@@ -206,3 +206,193 @@ def test_a_shift_the_modeller_drew_nothing_for_waits_for_the_next_batch(monkeypa
         return kept, items[0]["extraction"].get("possible_shift"), s.carried_shift
 
     assert asyncio.run(run()) == ("possible_shift", True, None)
+
+
+def test_a_correction_after_the_new_tab_click_stays_on_its_board(monkeypatch):
+    async def model(meeting, compact, window, items):
+        return CallResult({"summary": "s", "ops": [{"op": "update_node", "id": "n1", "label": "Gateway",
+                                                    "src": items[0]["utt"]["id"]}]}, 1)
+    monkeypatch.setattr(agents, "model", model)
+
+    async def run():
+        s = Session()
+        s.status, s.mode, s.board, s.new_tab_requested = "running", "mic", board_with(2), True
+        s.spoken.append({"id": "u02", "speaker": "Ana", "text": "t"})
+        await s._run_modeller([{"utt": s.spoken[-1], "extraction": ex(new_tab_requested=True)}])
+        return s
+
+    s = asyncio.run(run())
+    assert list(s.board.boards) == ["flow"] and s.board.boards["flow"]["nodes"]["n1"]["label"] == "Gateway"
+    assert s.new_tab_requested                                                  # still waiting for a new subject
+
+
+def test_a_shift_is_carried_for_two_utterances_at_most_and_not_when_the_board_is_too_small(monkeypatch):
+    async def model(meeting, compact, window, items):
+        return CallResult({"summary": "s", "ops": []}, 1)
+    monkeypatch.setattr(agents, "model", model)
+
+    async def run():
+        s = Session()
+        s.status, s.mode, s.board = "running", "mic", board_with(3)
+        carried = []
+        for i, flags in enumerate([{"topic_shift": True}, {}, {}, {}], start=2):
+            fut = asyncio.get_running_loop().create_future()
+            fut.set_result(ex(**flags))
+            s.spoken.append({"id": f"u{i:02d}", "speaker": "Ana", "text": "t"})
+            s.pending.append((s.spoken[-1], fut))
+            items = s._next_batch()
+            carried.append(items[0]["extraction"]["topic_shift"])
+            await s._run_modeller(items)                                       # draws nothing each time
+        s.board = board_with(2)
+
+        async def model2(meeting, compact, window, items):                     # tries a tab the guard refuses
+            return CallResult({"summary": "s", "ops": [{"op": "new_board", "id": "x", "title": "X",
+                                                        "src": items[0]["utt"]["id"]}]}, 1)
+        monkeypatch.setattr(agents, "model", model2)
+        await s._run_modeller([{"utt": s.spoken[-1], "extraction": ex(possible_shift=True)}])
+        return carried, s.carried_shift
+
+    assert asyncio.run(run()) == ([True, True, True, False], None)
+
+
+def test_stop_clears_the_new_tab_request_and_a_carried_shift_in_the_browser_too():
+    async def run():
+        s = Session()
+        sent = []
+
+        async def emit(ev, record=True):
+            sent.append(ev)
+        s.emit = emit
+        s.status, s.mode, s.board = "running", "mic", board_with(2)
+        await s.request_new_tab(True)
+        s.carried_shift = "topic_shift"
+        await s._finish_meeting()
+        return s, sent
+
+    s, sent = asyncio.run(run())
+    assert not s.new_tab_requested and s.carried_shift is None
+    assert [e["pending"] for e in sent if e["type"] == "new_tab"] == [True, False]
+
+
+def test_a_carried_topic_shift_opens_a_tab_for_the_first_content_of_the_new_subject(monkeypatch):
+    """A question names the new subject (TOPIC_SHIFT, nothing to draw); the answer is its first content. When the
+    modeller draws that answer as new nodes without opening a tab, the server opens one; not when what it drew edits the
+    current board, not for a shift heard on the utterance itself, and not when the board is too small to leave."""
+    new = [{"op": "add_node", "id": "dataset", "label": "Dataset", "type": "data", "src": "u03"},
+           {"op": "add_node", "id": "evals", "label": "Evals", "type": "system", "src": "u03"},
+           {"op": "connect", "from": "dataset", "to": "evals", "src": "u03"}]
+    edits = new + [{"op": "connect", "from": "evals", "to": "n0", "src": "u03"}]
+
+    async def run(drawn, nodes=3, carried=True):
+        calls = []
+
+        async def model(meeting, compact, window, items):
+            calls.append(items)
+            return CallResult({"summary": "s", "ops": [] if len(calls) == 1 else [dict(op) for op in drawn]}, 1)
+        monkeypatch.setattr(agents, "model", model)
+        s = Session()
+        s.status, s.mode, s.board = "running", "mic", board_with(nodes)
+        s.spoken += [{"id": "u02", "speaker": "Ana", "text": "Do you have a test plan?"},
+                     {"id": "u03", "speaker": "Ana", "text": "No, I test by hand."}]
+        await s._run_modeller([{"utt": s.spoken[0], "extraction": {**ex(topic_shift=True), "kind": "question"}}])
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(ex(topic_shift=not carried))
+        s.pending.append((s.spoken[1], fut))
+        items = s._next_batch()
+        await s._run_modeller(items)
+        user = agents.build_modeller_user(s.board.compact(), [], calls[1])
+        return s.board, user
+
+    board, user = asyncio.run(run(new))
+    assert board.active == "new_topic" and {"dataset", "evals"} <= set(board.boards["new_topic"]["nodes"])
+    assert len(board.boards["flow"]["nodes"]) == 3
+    assert "TOPIC_SHIFT (carried" in user
+
+    board, _ = asyncio.run(run(edits))                     # it connects to the current board: drawn where it is
+    assert list(board.boards) == ["flow"] and "evals->n0" in board.boards["flow"]["edges"]
+
+    board, _ = asyncio.run(run(new, carried=False))        # the modeller saw the shift itself and chose to stay
+    assert list(board.boards) == ["flow"]
+
+    board, _ = asyncio.run(run(new, nodes=2))              # no tab after a board of two nodes
+    assert list(board.boards) == ["flow"]
+
+
+# ------------------------------------------------------------------ no empty tabs
+def test_a_new_board_without_nodes_is_not_opened():
+    nb = lambda i: {"op": "new_board", "id": i, "title": i.title(), "src": "u05"}  # noqa: E731
+    node = {"op": "add_node", "id": "x", "label": "X", "type": "step", "src": "u05"}
+    group = {"op": "add_group", "id": "g", "label": "G", "src": "u05"}
+    upd = {"op": "update_node", "id": "n0", "note": "n", "src": "u05"}
+    def drop(ops):
+        kept, rejected = Session._drop_empty_new_boards(ops)
+        return [[o["op"] for o in kept], [r["op"]["op"] for r in rejected]]
+    assert drop([nb("a")]) == [[], ["new_board"]]
+    assert drop([nb("a"), group, node]) == [["new_board", "add_group", "add_node"], []]
+    assert drop([nb("a"), group]) == [[], ["new_board", "add_group"]]       # what was meant for it goes with it
+    assert drop([upd, nb("a")]) == [["update_node"], ["new_board"]]
+    assert drop([nb("a"), {"op": "switch_board", "board": "flow", "src": "u05"}, node]) == \
+        [["switch_board", "add_node"], ["new_board"]]
+    assert Session._drop_empty_new_boards([nb("a")])[1][0]["error"] == pipeline.EMPTY_NEW_BOARD
+
+
+def test_the_first_board_opens_with_its_first_nodes_and_is_titled_after_them(monkeypatch):
+    """Small news before the subject: the modeller opens a tab titled from the meeting with nothing on it. It is not
+    opened, so the next subject's nodes get a tab of their own title instead of landing under the wrong one."""
+    drawn = iter([[{"op": "new_board", "id": "meeting_flow", "title": "Meeting flow", "src": "u02"}],
+                  [{"op": "new_board", "id": "pipeline", "title": "Pipeline", "kind": "architecture", "src": "u03"},
+                   {"op": "add_node", "id": "stt", "label": "Speech to text", "type": "system", "src": "u03"}]])
+
+    async def model(meeting, compact, window, items):
+        return CallResult({"summary": "s", "ops": next(drawn)}, 1)
+    monkeypatch.setattr(agents, "model", model)
+
+    async def run():
+        s = Session()
+        s.status, s.mode = "running", "mic"
+        for uid in ("u02", "u03"):
+            s.spoken.append({"id": uid, "speaker": "Ana", "text": "t"})
+            await s._run_modeller([{"utt": s.spoken[-1], "extraction": ex()}])
+            if uid == "u02":
+                assert not s.board.boards
+        return s.board
+
+    board = asyncio.run(run())
+    assert list(board.boards) == ["pipeline"] and board.boards["pipeline"]["title"] == "Pipeline"
+    assert "stt" in board.boards["pipeline"]["nodes"]
+
+
+def test_an_empty_tab_for_a_shift_or_a_request_keeps_them_waiting(monkeypatch):
+    async def model(meeting, compact, window, items):
+        return CallResult({"summary": "s", "ops": [{"op": "new_board", "id": "evals", "title": "Evals",
+                                                    "src": items[0]["utt"]["id"]}]}, 1)
+    monkeypatch.setattr(agents, "model", model)
+
+    async def run(flags):
+        s = Session()
+        s.status, s.mode, s.board = "running", "mic", board_with(3)
+        s.new_tab_requested = bool(flags.get("new_tab_requested"))
+        s.spoken.append({"id": "u02", "speaker": "Ana", "text": "Do you have a test plan?"})
+        await s._run_modeller([{"utt": s.spoken[-1], "extraction": {**ex(**flags), "kind": "question"}}])
+        return s
+
+    s = asyncio.run(run({"topic_shift": True}))
+    assert list(s.board.boards) == ["flow"] and s.carried_shift == "topic_shift"     # the answer gets the shift
+    s = asyncio.run(run({"new_tab_requested": True}))
+    assert list(s.board.boards) == ["flow"] and s.new_tab_requested                  # the request still waits
+
+
+# ------------------------------------------------------------------ the topic-shift question
+def test_topic_shift_criteria_cover_a_turn_to_a_plan_about_the_same_project():
+    """From describing/diagnosing what is on the board to what to build about it (a plan, a new process) is a shift,
+    while a further step of a plan already on the board or a problem with one of its components is not."""
+    from whiteboard.agents.prompts.extractor import EXTRACTOR_SYSTEM
+    from whiteboard.agents.prompts.extractor_jev import JEV_TOPIC_SHIFT_CRITERIA
+    for text in (JEV_TOPIC_SHIFT_CRITERIA["true"], EXTRACTOR_SYSTEM):
+        for phrase in ("describing or diagnosing", "even about the same project", "a plan", "question or advice"):
+            assert phrase in text
+    for text in (JEV_TOPIC_SHIFT_CRITERIA["false"], EXTRACTOR_SYSTEM):
+        assert "further step of" in text and "problem" in text
+    for text in (*JEV_TOPIC_SHIFT_CRITERIA.values(), EXTRACTOR_SYSTEM):   # general, not one transcript's
+        for word in ("ElevenLabs", "insurance", "voice agent", "evaluacion", "Shape the Talk"):
+            assert word not in text

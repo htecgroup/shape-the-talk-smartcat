@@ -19,14 +19,15 @@ Extractor        one call per utterance, concurrent (Jev by default, or Claude)
 Board Modeller   compact board JSON + recent transcript → typed ops
                  (add_node update_node remove_node connect disconnect reroute mark add_group set_group
                   new_board switch_board undo); server guards: new_board needs a topic shift (or the New tab
-                  button), undo needs kind=undo
+                  button), undo needs kind=undo; ops for a detail board are routed to it
       ▼
 BoardState       single source of truth: validated, versioned, undo per utterance
       ▲   ├─ Analyst       background, every 4 utterances: open questions, disagreements, closes stale disputes
       │   └─ Consolidator  background, every 4 utterances, on the board a topic shift leaves, and at the end on
       │                    every changed board: merges duplicates and placeholders, groups parts, connects
       │                    loose nodes, folds technology/attribute nodes into notes, drops meta nodes
-      │                    (cleanup ops, never touches disputes or tabs)
+      │                    (cleanup ops, never touches disputes or tabs); splits a big board into an
+      │                    overview and detail boards (extract_subflow)
       │                    + a layout plan that covers the board: spine, direction, placements (LW_LAYOUT_HINTS)
       ▼
 WebSocket → browser renderer (SVG + rough.js)       runs/<timestamp>.json → replay
@@ -60,6 +61,29 @@ People can also ask for one: the **+** after the tabs (during a meeting) makes t
 new board (`{"cmd": "new_tab"}`; the modeller titles it, and if it draws without opening one the server opens a "New
 topic" board for it). The request shows as a dashed tab until the board opens; clicking it cancels.
 
+## Overview and detail boards
+
+A big topic is drawn the way a person would: an overview of 6-10 nodes, with a drill-down board for each
+self-contained sub-flow (caller verification with its retries, fraud checks and 3-D Secure, refunds). The consolidator
+decides: when the board it cleans up has more than ~14 nodes, or a sub-flow with its own decisions that joins the rest
+through few edges, it emits `extract_subflow {nodes, id, label, title, note}` (also in the final pass at meeting end,
+which is told it is the last chance; the new detail boards then get a pass of their own). `BoardState` does the rest
+deterministically and undoably: the nodes, the edges between them and their groups move to a new detail board
+(`parent` = the overview, its tab right after the overview's); one summary node (`detail` = the detail board) takes
+their place and every edge across the cut (parallel ones merged, labels kept); on the detail board the outside ends are
+reference nodes (same id, `ref_board` = the overview), so it reads on its own. One level only.
+
+The modeller keeps the overview as the active board and sees its detail boards in full; an op for something on a
+detail board carries `"board": "<detail id>"`. The server also routes ops whose nodes are only on one detail board
+there, turns a `switch_board` to a detail board into ops on it, makes a connect across the cut a reference plus an
+overview edge to the summary node, keeps references in sync with the overview node, and counts detail boards as the
+same topic (the extractor's brief, `_fits_new_board`). The consolidator never removes references or summary nodes.
+
+In the browser, detail tabs are small and indented (`↳ Verification`) under their overview, a tab that changed while
+not shown gets a dot; a summary node is a stacked card with a `+N ▸` badge and opens its detail board, a reference
+node is a stub-like pill ("from Orchestrator", "→ Human agent") and opens the overview. JSON export carries `parent`,
+`detail` and `ref_board`; Mermaid puts each detail board in its own section after its overview.
+
 ## Approval modes
 
 **⚡ Autopilot** lets the agents edit the whole board freely. **✋ Ask first** still applies additions and changes right
@@ -91,9 +115,23 @@ and when the meeting ends for every board that changed since its last layout in 
 event, so Replay does it too; a board that didn't change keeps its layout). Wrapped rows snake: they alternate
 left-to-right and right-to-left, and a group in a right-to-left row is mirrored so the flow enters at its first member.
 
+Tidy has two layout engines and keeps whichever reads better on that board (`simplify.js` `layout()`): its own
+(`tidy.js`, above) and [ELK](https://eclipse.dev/elk/)'s layered layout (`elk.js` on the vendored elkjs 0.9.3 in
+`static/vendor/`): left to right, left to right wrapped into rows that fit the panel (each row reads left to right under
+the one before), or top to bottom. ELK gets every node with its drawn size, groups as compound nodes (a task list as a
+column), edge labels with their size (so it keeps room for them), and the back edges already turned round by the story
+order (the plan's spine, else from the entry points); it minimises crossings (layer sweep), places nodes with
+Brandes-Köpf and routes the edges orthogonally, which `routing.js` draws with rounded corners. Every candidate (with and
+without stubs) is routed and costed: edge length (long edges count less), crossings, labels over nodes, stubs, edges
+against the reading direction (right to left in a row, or up) and text that ends up small after fitting the panel. A
+mind map keeps tidy.js' layout. ELK runs synchronously (its bundle's fake worker is called directly) and only on a full
+re-layout, never while nodes are placed live; a busy board takes a few hundred ms per Tidy.
+
 With a layout plan (`LW_LAYOUT_HINTS=1`, the default) the consolidator also returns the story's main line in reading
 order (`spine`), `direction` (LR, or TB for hierarchies), `placements` of side nodes (before/after/above/below an
-anchor) and group orientation (row/column). Tidy follows it as constraints and still does the geometry itself. Without
+anchor) and group orientation (row/column). Tidy follows it as constraints and still does the geometry itself (ELK
+uses the spine and before / after placements for order and straightness; above / below and group orientation are left
+to its layering). Without
 a plan (or for ids it doesn't know) Tidy falls back to the graph structure. `LW_LAYOUT_HINTS=0` turns it off, for
 comparison.
 
@@ -117,7 +155,8 @@ modeller without thinking is faster but leaves placeholders and duplicates on li
 | `whiteboard/attendee.py` | Teams source: creates/leaves the Attendee bot, verifies webhook signatures, turns webhooks into utterances and participants |
 | `whiteboard/agents/` | One module per agent (`extractor`, `extractor_jev`, `modeller`, `consolidator`, `analyst`), plus `llm.py`, `schemas.py`, `settings.py` |
 | `whiteboard/agents/prompts/` | Prompt texts only, one module per agent |
-| `static/board/` | Renderer: `board.js` (state, render, camera), `tidy.js`, `place.js`, `routing.js`, `shapes.js`, `svg.js`, `export.js` |
+| `static/board/` | Renderer: `board.js` (state, render, camera), `tidy.js`, `elk.js` (ELK layered layout for Tidy), `place.js`, `routing.js`, `simplify.js` (stubs for far edges into shared sinks, one edge to a group, the choice between the Tidy layouts), `shapes.js`, `svg.js`, `export.js` |
+| `static/vendor/` | elkjs 0.9.3 (`elk.bundled.js`, EPL-2.0, `elk.LICENSE.md`) |
 | `static/app.js`, `mic.js`, `pcm-worklet.js` | UI and WebSocket client; mic capture (AudioWorklet → 24 kHz PCM16) |
 | `claude-mod/shapethetalk/` | Claude Code plugin: the same board drawn live in a pane next to the conversation |
 | `scripts/`, `data/`, `tests/` | Simulator, audio test harness, fake Attendee, mock meetings and test audio, pytest suite |

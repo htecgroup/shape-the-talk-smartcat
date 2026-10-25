@@ -14,7 +14,8 @@ const BoardTidy = (() => {
    *     edges have to cross (a small DP); bands alternate left-to-right /
    *     right-to-left (snake, like placeNew) and each starts right under the
    *     end of the previous one, so a long flow turns straight down instead of
-   *     running off into a thin strip
+   *     running off into a thin strip; its columns rise into the room the
+   *     earlier bands leave free above them
    *  6. y inside a band: weighted relaxation towards the neighbours plus an
    *     order-preserving projection (isotonic regression). Main-line edges
    *     weigh more, so the spine stays straight and side branches fan out
@@ -289,7 +290,8 @@ const BoardTidy = (() => {
       bx.push(xs);
     });
     const W = hi - lo;
-    let top = 0;
+    let top = 0, bottom = 0;
+    const done = [];   // {x0, x1, y1}: what the earlier bands occupy
     bands.forEach((rs, b) => {
       const inBand = (u) => bandOf.get(N.get(u).r) === b;
       const L = rs.map((r) => layers[r].filter(inBand));
@@ -318,16 +320,34 @@ const BoardTidy = (() => {
           l.forEach((u, i) => y.set(u, res[i]));
         }
       }
-      let y0 = Infinity, y1 = -Infinity;
-      for (const u of L.flat()) { y0 = Math.min(y0, y.get(u) - N.get(u).h / 2); y1 = Math.max(y1, y.get(u) + N.get(u).h / 2); }
+      let y0 = Infinity;
+      for (const u of L.flat()) y0 = Math.min(y0, y.get(u) - N.get(u).h / 2);
       const dir = bdir[b];
+      // a column rises up to what the earlier bands left free above it, so a
+      // flow that turns down stays next to where it came from instead of under
+      // the whole previous band. In flow order a column never sits higher than
+      // the one before it: the band steps down, it doesn't zig-zag.
+      let off = -Infinity;
       rs.forEach((r, i) => {
+        const cx = bx[b][i] - lo, half = colW[r] / 2;
+        if (!L[i].length) return;
+        let ct = Infinity, floor = -Infinity;
+        for (const u of L[i]) ct = Math.min(ct, y.get(u) - N.get(u).h / 2 - y0);
+        for (const q of done) if (q.x1 > cx - half - 8 && q.x0 < cx + half + 8) floor = Math.max(floor, q.y1);
+        off = Math.min(top, Math.max(off, floor === -Infinity ? top : floor + BANDGAP - ct));
         for (const u of L[i]) {
-          const p = { x: bx[b][i] - lo, y: top + y.get(u) - y0, dir };
-          if (N.get(u).dummy) dpos.set(u, { ...p, half: colW[r] / 2 }); else pos.set(u, p);
+          const p = { x: cx, y: off + y.get(u) - y0, dir };
+          if (N.get(u).dummy) dpos.set(u, { ...p, half }); else pos.set(u, p);
+          bottom = Math.max(bottom, p.y + N.get(u).h / 2);
         }
       });
-      top += y1 - y0 + BANDGAP;
+      rs.forEach((r, i) => {
+        for (const u of L[i]) {
+          const p = N.get(u).dummy ? dpos.get(u) : pos.get(u), hw = N.get(u).dummy ? colW[r] / 2 : N.get(u).w / 2;
+          done.push({ x0: p.x - hw, x1: p.x + hw, y1: p.y + N.get(u).h / 2 });
+        }
+      });
+      top = bottom + BANDGAP;
     });
     // waypoints of the long edges, in edge direction; dir = direction of travel
     const routes = chains.map((c) => {
@@ -338,7 +358,7 @@ const BoardTidy = (() => {
     // long back edges (they close a loop, e.g. the result shared back into where
     // the story started) get no corridor; layoutBoard routes them round the outside
     const backs = fwdDag.filter((d) => d.rev && !d.virtual && rank.get(d.to) - rank.get(d.from) > 2).map((d) => `${d.to}>${d.from}`);
-    return { pos, routes, backs, w: W, h: top - BANDGAP, bands: bands.length, cuts };
+    return { pos, routes, backs, w: W, h: bottom, bands: bands.length, cuts };
   }
 
   /* Mind map: the root in the middle, its branches split over a right and a

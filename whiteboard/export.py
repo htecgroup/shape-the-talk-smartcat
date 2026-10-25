@@ -3,6 +3,9 @@ and the analyst's questions and disagreements as Markdown.
 
 Pure functions over the board dicts of `BoardState.to_dict()` and the session's lists, so they are easy to test.
 Node coordinates live only in the browser, so no export carries positions; the PNG/SVG image is made client-side.
+A detail board (split off its overview, board["parent"]) is exported after its overview: in JSON with "parent", in
+Mermaid as its own section; the overview's summary node (node["detail"]) is drawn bold with a "▸", and the detail
+board's references to overview nodes (node["ref_board"]) as flag-shaped "from X" / "→ X" connectors.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ def _clean(item: dict) -> dict:
 
 
 def _export_board(b: dict) -> dict:
-    return {"id": b["id"], "title": b["title"], "kind": b["kind"],
+    return {"id": b["id"], "title": b["title"], "kind": b["kind"], **({"parent": b["parent"]} if b.get("parent") else {}),
             "groups": [_clean(g) for g in b.get("groups", {}).values()],
             "nodes": [_clean(n) for n in b["nodes"].values()],
             "edges": [_clean(e) for e in b["edges"].values()]}
@@ -63,9 +66,18 @@ def board_mermaid(board: dict) -> str:
     direction = ((board.get("layout") or {}).get("direction") or "LR").upper()
     lines = [f"flowchart {direction if direction in ('LR', 'RL', 'TB', 'BT') else 'LR'}"]
 
+    edges = list(board["edges"].values())
+
     def node_line(n: dict, indent: str) -> str:
         left, right = _SHAPES.get(n["type"], ("[", "]"))
-        return f'{indent}{_mid(n["id"])}{left}"{_text(n["label"])}"{right}'
+        label = n["label"]
+        if n.get("ref_board"):     # an off-page connector to the overview
+            left, right = ">", "]"
+            into = any(e["to"] == n["id"] for e in edges)
+            label = f'{"→" if into else "from"} {label}'
+        elif n.get("detail"):
+            label += " ▸"
+        return f'{indent}{_mid(n["id"])}{left}"{_text(label)}"{right}'
 
     nodes = list(board["nodes"].values())
     for g in board.get("groups", {}).values():
@@ -85,17 +97,25 @@ def board_mermaid(board: dict) -> str:
     for n in nodes:
         if n["status"] in _DASHED:
             lines.append(f'  class {_mid(n["id"])} {n["status"]}')
+        elif n.get("detail") or n.get("ref_board"):
+            lines.append(f'  class {_mid(n["id"])} {"detail" if n.get("detail") else "ref"}')
     if any(n["status"] in _DASHED for n in nodes):
         lines.append("  classDef ghost stroke-dasharray: 5 5,opacity:0.7")
         lines.append("  classDef disputed stroke:#e03131,stroke-width:2px")
+    if any(n.get("detail") for n in nodes):
+        lines.append("  classDef detail stroke-width:3px")
+    if any(n.get("ref_board") for n in nodes):
+        lines.append("  classDef ref stroke-dasharray: 4 3,fill:#f8f9fa")
     return "\n".join(lines) + "\n"
 
 
 def all_mermaid(meeting: dict, state: dict) -> str:
     """One fenced Mermaid block per board, under its title (pastes into GitHub, Notion, Confluence)."""
     out = [f"# {meeting.get('title') or 'Whiteboard'}\n"]
+    titles = {b["id"]: b["title"] for b in state.get("boards", [])}
     for b in state.get("boards", []):
-        out.append(f"## {b['title']}\n\n```mermaid\n{board_mermaid(b)}```\n")
+        head = (f"### {b['title']} (detail of {titles[b['parent']]})" if b.get("parent") in titles else f"## {b['title']}")
+        out.append(f"{head}\n\n```mermaid\n{board_mermaid(b)}```\n")
     return "\n".join(out)
 
 

@@ -19,6 +19,7 @@ const BoardExport = (() => {
 .node-label { font-family: ${HAND}; font-weight: 700; fill: #212529; font-size: 16px; text-anchor: middle; dominant-baseline: central; }
 .node.ghost .node-label { fill: #868e96; font-weight: 400; }
 .node-note { font-family: ${SANS}; font-size: 10.5px; fill: #6c757d; text-anchor: middle; }
+.stub-label { font-family: ${HAND}; font-weight: 700; font-size: 13px; text-anchor: middle; dominant-baseline: central; }
 .node .halo { display: none; }
 .edge path.line { fill: none; stroke: #495057; stroke-width: 1.9; stroke-linecap: round; }
 .edge.ghost path.line { stroke: #adb5bd; stroke-dasharray: 7 6; }

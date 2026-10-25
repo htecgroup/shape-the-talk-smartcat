@@ -27,8 +27,54 @@ const BoardShapes = (() => {
     return `M${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} L${x + r},${y + h} Q${x},${y + h} ${x},${y + h - r} L${x},${y + r} Q${x},${y} ${x + r},${y} Z`;
   }
 
+  /* A stub (simplify.js): a small pill next to an edge's source that stands for its far target,
+   * with the edge's label (if any) small above "→ target". */
+  const cut = (t, n) => { const s = String(t || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+  const stubText = (label) => `→ ${cut(label, 24)}`;
+  const stubSize = (label, edgeLabel, text = stubText(label)) => ({
+    w: Math.max(72, textW(text, "700 13px Kalam") + 26, edgeLabel ? textW(cut(edgeLabel, 30), "10.5px Inter") + 26 : 0),
+    h: edgeLabel ? 42 : 30,
+  });
+  function buildStub(n, rc, text = stubText(n.label), type = n.refType) {
+    const t = TYPE[type] || TYPE.step, { w, h } = stubSize(n.label, n.edgeLabel, text);
+    const ghost = n.status === "ghost", stroke = ghost ? "#adb5bd" : t.stroke;
+    const inner = el("g", { class: "inner" });
+    el("path", { class: "halo", d: roundedRect(w + 12, h + 12, 21) }, inner);
+    const d = roundedRect(w, h, 15), opts = { seed: hash(n.id), roughness: 0.8, stroke, strokeWidth: 1.5, fill: t.fill, fillStyle: "solid", strokeLineDash: [5, 4] };
+    const shape = rc ? rc.path(d, opts) : el("path", { d, fill: t.fill, stroke, "stroke-dasharray": "5 4" });
+    shape.classList.add("shape");
+    inner.appendChild(shape);
+    if (n.edgeLabel) el("text", { class: "node-note", x: 0, y: -6 }, inner).textContent = cut(n.edgeLabel, 30);
+    el("text", { class: "stub-label", x: 0, y: n.edgeLabel ? 8 : 0, fill: stroke }, inner).textContent = text;
+    return { inner, w, h };
+  }
+
+  /* A reference on a detail board to a node of its overview (board.py extract_subflow): drawn like a stub,
+   * "from X" where the sub-flow is entered, "→ X" where it leaves to X (refDir: simplify.js view). */
+  const refText = (n) => `${n.refDir === "out" ? "from" : n.refDir === "both" ? "↔" : "→"} ${cut(n.label, 24)}`;
+  const refSize = (n) => stubSize(n.label, "", refText(n));
+  function buildRef(n, rc) { return buildStub({ ...n, edgeLabel: "" }, rc, refText(n), n.type); }
+
+  /* A summary node (it stands for a detail board): a second card behind it and a "+N ▸" badge with the number of
+   * nodes on the detail board (detailN, set by the renderer), so it reads as "there is more inside". */
+  function addDetailMarks(n, inner, w, h, opts, rc) {
+    if (n.type !== "decision") {
+      const d = roundedRect(w, h, n.type === "system" ? 4 : 12);
+      const back = rc ? rc.path(d, { ...opts, seed: hash(n.id) + 1 }) : el("path", { d, fill: opts.fill, stroke: opts.stroke });
+      const g = el("g", { class: "detail-back", transform: "translate(6,6)" });
+      g.appendChild(back);
+      inner.insertBefore(g, inner.children[1] || null);    // behind the shape, after the halo
+    }
+    const text = `${n.detailN ? `+${n.detailN} ` : ""}▸`, bw = textW(text, "700 11px Inter") + 14;
+    const b = el("g", { class: "detail-badge", transform: `translate(${w / 2 - bw / 2 - 6},${h / 2})` }, inner);
+    el("rect", { x: -bw / 2, y: -9, width: bw, height: 18, rx: 9, fill: opts.stroke, stroke: "#fff", "stroke-width": 1.5 }, b);
+    el("text", { x: 0, y: 0.5, fill: "#fff", "text-anchor": "middle", "dominant-baseline": "central", "font-weight": 700, "font-size": 11, "font-family": "Inter, Helvetica, sans-serif" }, b).textContent = text;
+  }
+
   /* The inner SVG of a node (shape, label, note, badges) and its size. rc: rough.js canvas or null. */
   function buildNode(n, rc) {
+    if (n.type === "stub") return buildStub(n, rc);
+    if (n.ref_board) return buildRef(n, rc);
     const t = TYPE[n.type] || TYPE.step;
     const lines = wrap(n.label);
     const tw = Math.max(...lines.map((l) => textW(l, "700 16px Kalam")));
@@ -89,6 +135,7 @@ const BoardShapes = (() => {
     }
     shape.classList.add("shape");
     inner.appendChild(shape);
+    if (n.detail) addDetailMarks(n, inner, w, h, opts, rc);
 
     // label
     const shift = n.type === "actor" || n.type === "task" ? 13 : 0;
@@ -128,7 +175,7 @@ const BoardShapes = (() => {
     return { inner, w, h };
   }
 
-  function nodeSig(n) { return [n.label, n.type, n.status, n.note, n.group, !!n.done].join("|"); }
+  function nodeSig(n) { return [n.label, n.type, n.status, n.note, n.group, !!n.done, n.refType, n.edgeLabel, n.detail, n.detailN, n.ref_board, n.refDir].join("|"); }
 
   function buildEdge(e) {
     const g = el("g", { class: `edge ${e.status}` });
@@ -143,9 +190,10 @@ const BoardShapes = (() => {
       el("text", {}, labelG).textContent = e.label;
     }
     const tip = el("title", {}, g);
-    tip.textContent = `${e.from} → ${e.to}${e.label ? ` (${e.label})` : ""}${e.note ? `\n${e.note}` : ""}\nby ${e.by || "?"} (${e.src || "?"})`;
+    const end = (id) => String(id).replace(/^\u0002/, "group ");   // a group end (simplify.js)
+    tip.textContent = `${end(e.from)} → ${e.ref || end(e.to)}${e.label ? ` (${e.label})` : ""}${e.note ? `\n${e.note}` : ""}\nby ${e.by || "?"} (${e.src || "?"})`;
     return { g, line, glow, labelG, data: e };
   }
 
-  return { buildNode, nodeSig, buildEdge };
+  return { buildNode, nodeSig, buildEdge, stubSize, refSize };
 })();

@@ -10,11 +10,16 @@ Participants:
 BOARDS. Each board is one diagram (a tab). kind: process (steps in order), architecture (systems and how they talk), stakeholder, mindmap.
 {first_board}
 
+OVERVIEW AND DETAIL BOARDS. A big subject may have been split (by another agent) into an overview board and detail boards: a detail board has "parent" = its overview's id and holds one self-contained part (e.g. caller verification with its checks), and the overview shows that part as ONE summary node with "detail" = the detail board's id. On a detail board, nodes with "ref_board" are references to nodes of the overview (drawn as "from X" / "-> X"). The board JSON shows the active board and its detail boards in full. The active board is always an overview or a board without details; a detail board belongs to the same subject.
+- Talk that adds to, corrects or disputes something inside a detail board (a node on it, a new step of that part) goes THERE: give each of those ops "board": "<detail board id>". Everything else goes to the active board ("board": "").
+- Never re-add on the overview what is on one of its detail boards; never switch_board to a detail board; never open a new board for talk that continues one.
+- A new edge between a node of the overview and a node inside a detail board: one connect with "board" = the detail board (the reference and the overview edge to the summary node are added for you).
+
 NODE TYPES
 - actor: person, role or organisation (Customer, Restaurant, Courier, Finance team).
 - system: software, service, app or external provider (Payment gateway, Order service, Customer app, POS integration).
 - step: an action in a process. Short verb phrase ("Browse restaurants", "Assign courier").
-- decision: a yes/no branch in a process ("Payment OK?"). Only when a branch is actually described.
+- decision: a branch in a process: a condition with different outcomes ("if it's within opening hours ... otherwise ...", "when the number matches ... when it doesn't ..."), a check, or a retry limit ("after three failed tries it goes to a person"). Label: a short question ending in "?" ("Payment OK?", "Within opening hours?", "Number matches?"), with one labelled outgoing edge per outcome ("yes" / "no", "after 3 fails"). Only when a branch is actually described.
 - data: stored data or a data store (Payment token, Analytics warehouse).
 - task: a to-do or action item someone commits to or is asked to do, as opposed to a step of the process being described ("Ivan will draft the API spec", "we need to book the venue"). Label it as a short verb phrase ("Draft API spec").
 
@@ -22,20 +27,23 @@ TASKS
 - assignee: the id of the actor node of the person or team who owns the task ("Ivan will ..." -> assignee "ivan"). Only an actor that is already on the board (or added earlier in the same op list); if the owner is not an actor on the board, leave assignee "" and put "owner: <Name>" in the note. Do not add actors only to assign tasks to them. Re-assigning or un-assigning later: assign (assignee "" clears it). Assignment is not an edge: never connect a task to its assignee.
 - Several tasks that belong together (a named list, the action items of one topic or phase, "the sprint backlog"): add_task_list with a short label ("Sprint backlog", "Action items") and put the tasks into it (group of add_node, or set_group). A task list holds only tasks; use add_group for anything else.
 - Every person has their own task list, next to their actor. An assigned task moves into its assignee's list automatically (the list is created when they have none), and an un-assigned one goes back to the shared list it came from. So a shared list holds only unassigned tasks. To give someone a task, just assign it (or add_node with assignee); do not set_group it yourself. A shared list that is handed over to one person as a whole ("those are all Ivan's"): assign with node = the list id and assignee = the actor.
+- A task is not part of the diagram's flow: never connect it to a system, step or actor just because it is about it ("review the architecture", "check the orchestrator"); say what it is about in its note. Its edges are dependencies (below) or the data it produces.
 - Dependencies: when one task waits on another ("I'm blocked on Ivan's endpoint", "I can test it once Marko's screen is ready", "I need the changelog for the release notes"), connect the task that has to happen first -> the task that waits, label "blocks" (or "needed for" when it is an input rather than a blocker). Both ends are tasks, usually of different people; add the missing task first when it is new.
 - Done: when someone says a task is done, finished or ticked off, complete_task it. Never remove a finished task: it stays on the board, checked, as part of the plan. "Not done after all" / "reopen it": reopen_task.
 
-LABELS & IDS: labels 1-4 words; details go in note (max 12 words). ids are short snake_case nouns, unique per board (e.g. "payment_gateway"). Reuse existing ids exactly as shown in the board JSON; never add a node that already exists. Edge ids are "<from>-><to>".
+LABELS & IDS: labels 1-4 words; details go in note (max ~10 words; the board cuts longer notes off). update_node's note replaces the old note: rewrite it short with the most important facts, do not keep appending to it. ids are short snake_case nouns, unique per board (e.g. "payment_gateway"). Reuse existing ids exactly as shown in the board JSON; never add a node that already exists. Edge ids are "<from>-><to>".
 
 EDGES: from -> to in the direction of flow. Process boards: step order (actor -> first step it does, step -> next step, step -> system it uses). Architecture boards: caller -> callee, or the direction data is sent/pushed. Edge labels only when they add meaning ("pays via", "on success", "push", "events", "websocket"), 1-3 words.
 
 KEEP IT READABLE (a whiteboard for humans, typically 8-20 nodes per board)
 - Attributes and details of a step (what the user picks, timing, "while the food cooks") go into that node's note, not into extra nodes. "At checkout they pick address and time slot" = one Checkout step with note "pick address + time slot".
+- Branches are structure, not notes: when the speaker describes a condition with different outcomes, a check that can fail, or a retry limit, draw a decision node with its labelled outgoing edges to what happens in each case, never a note like "if X then A, else B".
+- Numbers about the whole thing (success rates, accuracy, prompt size, call volumes) are not notes on the steps of the flow; at most a short note on the one node they measure.
 - Never fan out: a statement like "everything goes to X" or "notify at every status change" gets ONE or TWO edges from the most central node(s), with the rest in a note. Never connect more than 2 existing nodes to a new node in one utterance.
 - Do not invent steps, systems or edges nobody mentioned.
 
 WHAT IS (NOT) A NODE
-- The subject of the meeting (the product, system or process the board is about) is the board, not a node. Add it as a node only when it is clearly one component among others.
+- The subject of the meeting (the product, system or process the board is about) is the board, not a node. Add it as a node only when it is clearly one component among others. Once its parts are on the board, no node stands for the whole thing: connect to the part that does it (the entry point that takes the call, the component that calls an endpoint), not to a hub that is the whole system and a step of its flow at the same time.
 - Framing and summary sentences ("it turns X into Y", "today I'll show you...", "in short, it does Z") add no nodes and no edges; at most a note on an existing node. Abstract inputs/outputs ("live conversation", "the result") are not nodes unless a concrete component produces or stores them.
 - "X runs on / uses / is powered by / is implemented with / is built on Y", where Y is a technology, model, library, language or vendor: put Y into X's note ("runs on Y"), no new node. Y is a node only when it is a separately deployed system that other components call (an external service, a database, a queue).
 - What a component produces, decides or tells another component ("the operations", "the order", "the layout") is a note on that component or an edge label, not a new node, unless it is stored or sent somewhere on the board.
@@ -57,18 +65,23 @@ HOW TO REACT
 6. question: no nodes for questions (another agent tracks them). If an answer states facts, model the facts (e.g. a data node).
 7. chit_chat never reaches you; if an utterance has no design content, return no ops for it.
 8. Boards/tabs: each board is about one subject. Stay on the current board while the talk continues its subject (more detail, related systems, corrections); systems, apps and services mentioned while discussing the process belong on the process board as "system" nodes. An utterance may carry a flag:
-   - TOPIC_SHIFT: the talk moved to another subject (e.g. "let me map the systems behind it", or the next person's update about something else). Open a new board unless the utterance clearly continues the current board's subject.
+   - TOPIC_SHIFT: the talk moved to another subject (e.g. "let me map the systems behind it", or the next person's update about something else). Open a new board and put what these utterances add there, also when it mentions something that is on the current board (re-add that element on the new board when the new content connects to it). Stay only when the utterance only corrects or adds detail to nodes already on the current board.
+   - TOPIC_SHIFT (carried ...): the shift was heard on an earlier utterance that had nothing to draw (often a question or one-liner that names the new subject, like "do you have a test plan for it?"). This utterance is the first content of that new subject, e.g. the answer: same as TOPIC_SHIFT, open the new board for it.
    - POSSIBLE_TOPIC_SHIFT: maybe another subject. Open a new board only when what is said has nothing to do with the current board (none of it would connect to its nodes); otherwise stay.
    - NEW_TAB_REQUESTED: a person asked for a new diagram. Your first op must be new_board, titled after what these utterances are about, and what they add goes there.
-   Without a flag, never open a new board. A new board: new_board with the kind that fits (process for steps in order, architecture for systems talking to each other) and a 2-4 word title naming its subject; elements that also exist on another board can be re-added there with the same id. If the subject is the one of an earlier board, switch_board to it instead of opening a new one.
-9. Ops apply in order to the active board; later ops may reference nodes added earlier in the same list. Every op's "src" is the id of the utterance that caused it (one of the NEW utterances).
+   Without a flag, never open a new board. Open a board only together with the nodes that go on it (an empty new_board is dropped; when a shift has nothing to draw yet, return no ops and the next utterance gets the flag). A new board: new_board with the kind that fits (process for steps in order, architecture for systems talking to each other) and a 2-4 word title naming what is on it (the subject of these utterances), never the meeting's title or topic: a meeting often covers several subjects, each on its own board; elements that also exist on another board can be re-added there with the same id. If the subject is the one of an earlier board, switch_board to it instead of opening a new one.
+9. Ops apply in order to the active board (or to the detail board an op names in "board"); later ops may reference nodes added earlier in the same list. Every op's "src" is the id of the utterance that caused it (one of the NEW utterances).
 10. Keep each utterance to the few ops it really needs (typically 1-5). Unknown fields are null.
 
 summary: max 12 words describing what you changed, e.g. "Rerouted payment through the gateway" or "No board change".{speech_notes}"""
 
-FIRST_BOARD_SCRIPTED = 'If there is no board yet, your first op must be new_board (for this meeting the first board is the process flow, e.g. id "order_flow").'
-FIRST_BOARD_LIVE = ('If there is no board yet, your first op must be new_board: kind process for a flow of steps, architecture for '
-                    'systems talking to each other; a short title naming the subject (e.g. "Mobile ordering flow") and a matching snake_case id.')
+FIRST_BOARD_SCRIPTED = ('If there is no board yet, open it with new_board before the first nodes (often the process flow, e.g. id "order_flow"), '
+                        'titled after what those nodes are about, not the meeting\'s title or topic. No nodes to draw yet (greetings, '
+                        'framing, news): no ops; the board opens with its first nodes.')
+FIRST_BOARD_LIVE = ('If there is no board yet, open it with new_board before the first nodes: kind process for a flow of steps, architecture '
+                    'for systems talking to each other; a short title naming what those nodes are about (e.g. "Mobile ordering flow"), not the '
+                    'meeting\'s title or topic, and a matching snake_case id. No nodes to draw yet (greetings, framing, news): no ops; the board '
+                    'opens with its first nodes.')
 
 # Extra instructions for talk-live mode (see prompts/extractor.py).
 MODELLER_SPEECH_NOTES = """

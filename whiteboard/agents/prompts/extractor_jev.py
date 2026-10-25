@@ -31,13 +31,20 @@ JEV_TOPIC_SHIFT_CRITERIA = {
             "plan or agenda item, or the next person's update about something else. Explicit (\"let me switch gears "
             "and map the systems behind it\", \"next topic\", \"moving on to the release\") or implicit: no "
             "transition phrase, but what it talks about has nothing to do with `current_board` or the last lines of "
-            "`context`. Going back to the subject of one of `other_boards` counts too. A phrase that hands over to the "
-            "next subject or person (\"okay, next one\", \"Filip, you can continue\") counts even without design "
-            "content.",
-    "false": "It continues the subject of `current_board` or of the last lines of `context`: more detail, a related "
-             "system, step or task, a question, correction or agreement about it. Mentioning a system, service or "
-             "detail inside the current discussion is NOT a topic shift. Small talk, greetings and logistics are NOT a "
-             "topic shift by themselves. When `current_board` is none yet, opening the meeting and the first design "
+            "`context`. Also when the talk turns from describing or diagnosing what `current_board` shows (how a system "
+            "works, what is wrong with it) to a different kind of diagram, even about the same project: what to do or "
+            "build about it (a plan, the steps of a new process such as testing, evaluation, migration or rollout, "
+            "action items) or another system. Such a turn often comes as a question or advice that names the new "
+            "subject (\"do you have a test plan for it?\", \"what you need first is a rollout plan\"); its nodes "
+            "would not connect to the components on `current_board`. Going back to the subject of one of `other_boards` "
+            "counts too. A phrase that hands over to the next subject or person (\"okay, next one\", \"Filip, you can "
+            "continue\") counts even without design content.",
+    "false": "It continues the subject of `current_board` or of the last lines of `context`: more detail on the same "
+             "diagram, a related system or step that connects to what is on it, a question, correction or agreement "
+             "about its elements, or a further step of the plan or process that is already on it. Mentioning a "
+             "system, service or detail inside the current discussion is NOT a topic shift; a problem or number about "
+             "a component on `current_board` is NOT one either. Small talk, greetings and logistics are NOT a topic "
+             "shift by themselves. When `current_board` is none yet, opening the meeting and the first design "
              "statements are NOT a topic shift.",
 }
 JEV_REFERS_TO_INSTRUCTIONS = ("Which line of `context` does `new_utterance` react to (correct, object to, agree with, "

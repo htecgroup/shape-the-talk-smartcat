@@ -67,6 +67,10 @@ multi-word ("java classifier", never bare "java"). `LW_VOCABULARY` points to ano
 uv run --group dev pytest -q tests                  # pytest suite, no network
 uv run python scripts/simulate.py --speed 2         # headless simulated run: final boards + latency
 uv run python scripts/simulate.py --describe runs/<file>.json
+uv run python scripts/eval_diagrams.py              # diagram eval: all scenarios through the agents -> runs/eval/<ts>/report.json
+uv run python scripts/eval_diagrams.py --runs runs/<file>.json            # metrics only for existing runs, no API calls
+uv run python scripts/eval_diagrams.py --compare <a>/report.json <b>/report.json
+node scripts/render_board.mjs runs/<file>.json --out DIR [--engine elk|tidy|"elk WRAP"|...]   # boards as SVG, one layout engine only
 uv run python scripts/feed_audio.py [file.wav]      # stream a WAV into talk-live mode as if it were the mic
 uv run python scripts/make_test_audio.py            # regenerate the TTS test monologue
 uv run python scripts/fake_attendee.py              # fake Attendee server for the Teams mode, no Teams needed

@@ -21,6 +21,7 @@
     ws: null, mode: "mic", status: "idle",
     participants: [], colors: {}, total: 0,
     board: null, viewBoard: null, followActive: true, knownBoards: new Set(),
+    changedTabs: new Set(),                   // tabs that changed while not shown (a dot until opened)
     utts: new Map(), activity: [], paused: false,
     teamsIntro: null,                         // this browser's intro checkbox choice, "1" / "0"
     listed: 0,                                // questions + disagreements the analyst lists
@@ -43,6 +44,8 @@
   Board.init({
     colorOf, onEmptyChange: (empty) => $("boardEmpty").classList.toggle("hide", !empty),
     layoutSig: (b) => `${shapeSig(b)}|${planSig(b)}|${ownerSig(b)}`,   // the board's shape and plan, as far as Tidy uses them
+    onOpenBoard: (id) => openBoard(id),
+    boardInfo: (id) => { const b = boardOf(id); return b && { title: b.title, n: ownNodes(b) }; },
   });
 
   // ------------------------------------------------------------------ socket
@@ -98,10 +101,10 @@
     for (const a of s.activity) addActivity(a, false);
     renderLists(s.questions, s.disagreements);
     S.summaryWriting = false; setSummary(s.summary);
-    S.board = null; S.knownBoards = new Set(); S.followActive = true; S.newTabPending = !!s.new_tab_pending;
+    S.board = null; S.knownBoards = new Set(); S.changedTabs = new Set(); S.followActive = true; S.newTabPending = !!s.new_tab_pending;
     Board.reset();
-    // a board that already has a layout plan is shown laid out by it
-    Board.relayout(((s.board && s.board.boards) || []).filter((b) => b.layout).map((b) => b.id));
+    // a board that already has a layout plan is shown laid out by it; so is a detail board (it arrives whole)
+    Board.relayout(((s.board && s.board.boards) || []).filter((b) => b.layout || b.parent).map((b) => b.id));
     onBoard({ board: s.board, silent: true });
     setApprovalMode(s.approval_mode);
     S.deciding.clear(); S.approvalsSig = null; setServerMode(s.mode);
@@ -268,7 +271,7 @@
 
   // ------------------------------------------------------------------ board
   // consolidator ops that change the structure enough to warrant a full re-layout
-  const RESTRUCTURE = new Set(["add_group", "add_task_list", "set_group", "remove_node", "reroute"]);
+  const RESTRUCTURE = new Set(["add_group", "add_task_list", "set_group", "remove_node", "reroute", "extract_subflow"]);
   function restructured(ev) {
     if (ev.agent !== "consolidator" && ev.agent !== "approval") return false;
     const ops = ev.applied || [];
@@ -304,6 +307,13 @@
     S.board = state;
     const ids = state.boards.map((b) => b.id);
     const fresh = ids.filter((id) => !S.knownBoards.has(id));
+    // a detail board arrives whole (split off its overview): laid out in full when first shown
+    Board.relayout(state.boards.filter((b) => b.parent && fresh.includes(b.id)).map((b) => b.id));
+    // a tab that changed while another one is shown (the modeller adding to a detail board) gets a dot until opened
+    for (const b of state.boards) {
+      const old = before.get(b.id);
+      if (old && b.id !== S.viewBoard && shapeSig(old) !== shapeSig(b)) S.changedTabs.add(b.id);
+    }
     if (state.active && (fresh.includes(state.active) || S.followActive)) { S.viewBoard = state.active; S.followActive = true; }
     if (!ids.includes(S.viewBoard)) S.viewBoard = state.active;
     renderTabs(ev.silent ? [] : fresh);
@@ -333,22 +343,37 @@
       : `<button class="tab tab-add" id="btnNewTab" title="New tab: start the next thing said on a new diagram" aria-label="New tab">${ico("plus")}</button>`;
   }
 
+  // the board's own nodes (not the references to its overview a detail board has)
+  const ownNodes = (b) => Object.values(b.nodes).filter((n) => !n.ref_board).length;
+  const boardOf = (id) => (S.board && S.board.boards.find((b) => b.id === id)) || null;
+
+  // Detail boards (split off an overview by the consolidator) come right after their overview in the server's
+  // order; their tabs are smaller and indented ("↳ Verification") under it.
   function renderTabs(fresh = []) {
     const tabs = $("tabs");
     if (!S.board || !S.board.boards.length) { tabs.innerHTML = `<div class="tab on">Whiteboard</div>`; return; }
-    tabs.innerHTML = S.board.boards.map((b) => `
-      <button class="tab ${b.id === S.viewBoard ? "on" : ""} ${fresh.includes(b.id) ? "new" : ""}" data-id="${esc(b.id)}">
-        ${esc(b.title)} <span class="kind-tag">${esc(b.kind)}</span><span class="n">${Object.keys(b.nodes).length}</span>
-      </button>`).join("") + newTabButton();
+    S.changedTabs.delete(S.viewBoard);
+    tabs.innerHTML = S.board.boards.map((b) => {
+      const cls = ["tab", b.id === S.viewBoard ? "on" : "", fresh.includes(b.id) ? "new" : "", b.parent ? "sub" : "",
+        S.changedTabs.has(b.id) ? "changed" : ""].filter(Boolean).join(" ");
+      const tip = b.parent ? ` title="Detail of “${esc((boardOf(b.parent) || {}).title || b.parent)}”"` : "";
+      return `<button class="${cls}" data-id="${esc(b.id)}"${tip}>
+        ${b.parent ? `<span class="sub-mark">↳</span>` : ""}${esc(b.title)} ${b.parent ? "" : `<span class="kind-tag">${esc(b.kind)}</span>`}<span class="n">${ownNodes(b)}</span>
+      </button>`;
+    }).join("") + newTabButton();
     const add = $("btnNewTab");
     if (add) add.addEventListener("click", () => send({ cmd: "new_tab", on: !S.newTabPending }));
-    tabs.querySelectorAll(".tab[data-id]").forEach((t) => t.addEventListener("click", () => {
-      S.viewBoard = t.dataset.id;
-      S.followActive = t.dataset.id === S.board.active;
-      renderTabs();
-      Board.render(S.board.boards.find((x) => x.id === S.viewBoard), { silent: true });
-      renderApprovals(S.approvals);
-    }));
+    tabs.querySelectorAll(".tab[data-id]").forEach((t) => t.addEventListener("click", () => openBoard(t.dataset.id)));
+  }
+
+  /* Show a board: a tab click, or a click on a summary node (its detail board) or a reference node (the overview). */
+  function openBoard(id) {
+    if (!boardOf(id)) return;
+    S.viewBoard = id;
+    S.followActive = id === S.board.active;
+    renderTabs();
+    Board.render(boardOf(id), { silent: true });
+    renderApprovals(S.approvals);
   }
 
   // ---------------------------------------------------------------- agents
@@ -367,6 +392,7 @@
       case "undo": s = `↶ undo ${op.target_src}`; break;
       case "new_board": s = `▣ new tab “${op.title}”`; break;
       case "switch_board": s = `⇄ tab ${op.board}`; break;
+      case "extract_subflow": s = `⊞ “${op.label}” → detail tab (${(op.nodes || []).length} nodes)`; break;
       case "add_group": s = `▢ group “${op.label}”`; break;
       case "set_group": s = `▢ ${op.node} ∈ ${op.group}`; break;
       case "add_task_list": s = `☑ task list “${op.label}”${op.owner ? ` @${op.owner}` : ""}`; break;
@@ -466,7 +492,6 @@
     const ids = new Set(pending.map((p) => p.id));
     for (const id of S.deciding) if (!ids.has(id)) S.deciding.delete(id);   // decided: it left the list
     const canDecide = ["live", "mic", "teams"].includes(S.serverMode);
-    const boardOf = (id) => (S.board && S.board.boards.find((b) => b.id === id)) || null;
     const tabTitle = (id) => (boardOf(id) || {}).title || id;
     const targets = (p) => p.targets || [p.target];
     const labelOf = (p, t) => ((boardOf(p.board) || { nodes: {} }).nodes[t] || {}).label || p.label;

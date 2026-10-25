@@ -33,7 +33,7 @@ def test_consolidator_prompt_formats_and_reuses_modeller_schema(monkeypatch):
         assert res.data["ops"] == [{"op": "remove_node", "src": "u01", "id": "agent_one"}]   # clean_ops applied
         assert ("LIVE SPEECH" in seen["system"]) == (meeting.get("source") == "mic")
         assert "{" not in seen["system"].split("Participants:")[0]                          # all placeholders filled
-    assert seen["schema"] is agents.MODELLER_SCHEMA and seen["effort"] == agents.CONSOLIDATOR_EFFORT
+    assert seen["schema"] is agents.CONSOLIDATOR_OPS_SCHEMA and seen["effort"] == agents.CONSOLIDATOR_EFFORT
     assert "[u01] Ana: hi" in seen["user"] and '"active_board": "b"' in seen["user"]
 
 
@@ -106,12 +106,12 @@ def test_consolidator_runs_every_n_and_at_the_end_with_guards(fake_agents, monke
         s = Session()
         orig = s._run_consolidator
 
-        async def seeded_run(board_id=None):  # an open dispute on n_u05 that the consolidator must leave alone
+        async def seeded_run(board_id=None, final=False):  # an open dispute on n_u05 that the consolidator must leave alone
             if not seeded:
                 s.board.apply_ops([{"op": "mark", "target": "n_u05", "status": "disputed", "src": "u05"}],
                                   by_lookup={u["id"]: u["speaker"] for u in s.spoken})
                 seeded["done"] = True
-            await orig(board_id)
+            await orig(board_id, final)
         s._run_consolidator = seeded_run
         assert (await s.start("live", speed=16))["ok"]
         await wait_for(lambda: s.status == "finished")
@@ -153,7 +153,10 @@ def test_consolidator_disabled_with_zero(fake_agents, monkeypatch):
 
 def test_layout_plan_schema_is_flat_and_prompt_follows_the_flag(monkeypatch):
     lay = agents.CONSOLIDATOR_SCHEMA["properties"]["layout"]
-    assert agents.CONSOLIDATOR_SCHEMA["properties"]["ops"] == agents.MODELLER_SCHEMA["properties"]["ops"]
+    assert agents.CONSOLIDATOR_SCHEMA["properties"]["ops"] == agents.CONSOLIDATOR_OPS_SCHEMA["properties"]["ops"]
+    # the consolidator's ops are the modeller's plus extract_subflow (only it splits a board)
+    ops = agents.CONSOLIDATOR_SCHEMA["properties"]["ops"]["items"]["properties"]["op"]["enum"]
+    assert ops == agents.MODELLER_SCHEMA["properties"]["ops"]["items"]["properties"]["op"]["enum"] + ["extract_subflow"]
     assert sorted(lay["required"]) == ["direction", "groups", "placements", "spine"]
     text = json.dumps(agents.CONSOLIDATOR_SCHEMA)
     assert "anyOf" not in text and '"null"' not in text          # the grammar compiler rejects both

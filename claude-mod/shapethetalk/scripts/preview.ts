@@ -75,7 +75,10 @@ for (const s of SAMPLES) {
 <script src="../../../static/board/shapes.js"></script>
 <script src="../../../static/board/place.js"></script>
 <script src="../../../static/board/tidy.js"></script>
+<script src="../../../static/vendor/elk.bundled.js"></script>
+<script src="../../../static/board/elk.js"></script>
 <script src="../../../static/board/routing.js"></script>
+<script src="../../../static/board/simplify.js"></script>
 <script src="../../../static/board/board.js"></script>
 <script>
   const board = ${JSON.stringify(webBoard)};

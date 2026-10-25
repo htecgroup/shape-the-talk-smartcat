@@ -19,6 +19,8 @@ def build_modeller_user(board_compact: dict, window: list[dict], new_items: list
         claims = "; ".join(ex.get("claims") or []) or "-"
         ref = f" refers_to={ex['refers_to']}" if ex.get("refers_to") else ""
         shift = (" NEW_TAB_REQUESTED" if ex.get("new_tab_requested") else
+                 " TOPIC_SHIFT (carried from an earlier utterance with nothing to draw)"
+                 if ex.get("topic_shift") and ex.get("shift_carried") else
                  " TOPIC_SHIFT" if ex.get("topic_shift") else " POSSIBLE_TOPIC_SHIFT" if ex.get("possible_shift") else "")
         lines.append(f"{line(u)}\n    extractor: kind={ex.get('kind', '?')}{ref}{shift} | claims: {claims}")
     ctx = "\n".join(line(u) for u in window) or "(none)"

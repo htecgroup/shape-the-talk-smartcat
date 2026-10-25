@@ -27,6 +27,8 @@ CONSOLIDATE_EVERY = int(os.getenv("LW_CONSOLIDATE_EVERY", "4"))  # meaningful ut
 CONSOLIDATOR_BLOCKED = {"new_board", "switch_board", "undo"}     # the consolidator only edits the active board
 POSSIBLE_SHIFT_MIN_NODES = 3    # a possible topic shift opens a tab only once the current board has this many nodes
 SHIFT_FLAGS = ("topic_shift", "possible_shift")                  # extractor flags that allow a new tab, strongest first
+MAX_SHIFT_CARRY = 2         # utterances with content a topic shift the modeller drew nothing for may be carried to
+EMPTY_NEW_BOARD = "new_board: nothing to draw on it yet"        # a tab opens together with its first nodes
 
 
 class AgentPipeline:
@@ -112,8 +114,8 @@ class AgentPipeline:
                     self.carried_shift = flag
                 continue
             if self.carried_shift and not any(ex.get(f) for f in SHIFT_FLAGS[:SHIFT_FLAGS.index(self.carried_shift) + 1]):
-                ex = {**ex, self.carried_shift: True, "shift_carried": True}
-            self.carried_shift = None
+                ex = {**ex, self.carried_shift: True, "shift_carried": self.carried_hops + 1}
+            self.carried_shift, self.carried_hops = None, 0
             items.append({"utt": utt, "extraction": ex})
         if items and self.new_tab_requested:
             items[0] = {**items[0], "extraction": {**items[0]["extraction"], "new_tab_requested": True}}
@@ -128,22 +130,32 @@ class AgentPipeline:
             if task and not task.done():
                 await task
         if CONSOLIDATE_EVERY > 0:
-            others = [b for b in self.board.board_order if b != self.board.active and self._needs_consolidation(b)]
-            for bid in others + ([self.board.active] if self.board.active else []):
-                self._kick_consolidator(force=True, board_id=bid)
-                if self.consolidator_task and not self.consolidator_task.done():
-                    await self.consolidator_task
+            # topic boards first (a pass may split one into an overview and detail boards), then the detail boards
+            # that are new or changed
+            tops = self.board.top_level()
+            others = [b for b in tops if b != self.board.active and self._needs_consolidation(b)]
+            active = [self.board.active] if self.board.active in tops else []
+            for bid in others + active:
+                await self._final_consolidation(bid)
+            for bid in [b for b in self.board.board_order if b not in tops and self._needs_consolidation(b)]:
+                await self._final_consolidation(bid)
         if self.board.board_order:
             await self.emit({"type": "relayout", "boards": list(self.board.board_order), "reason": "meeting_end"})
         self._kick_analyst(force=True)
         if self.analyst_task:
             await self.analyst_task
-        self.new_tab_requested = False      # nothing more will be said
+        self.carried_shift, self.carried_hops = None, 0   # nothing more will be said (Continue starts afresh)
+        await self.request_new_tab(False)                 # tells the browser too, which keeps it across Continue
         self.status = "finished"
         await self.emit_status()
         await self._write_summary()
         self._save_run(complete=True)
         await self.emit({"type": "run_saved", "file": self.run_file}, record=False)
+
+    async def _final_consolidation(self, bid: str) -> None:
+        self._kick_consolidator(force=True, board_id=bid, final=True)
+        if self.consolidator_task and not self.consolidator_task.done():
+            await self.consolidator_task
 
     async def _write_summary(self) -> None:
         """Meeting over: the summarizer's meeting summary of the whole conversation (every finished utterance,
@@ -187,12 +199,19 @@ class AgentPipeline:
         for op in ops:
             if isinstance(op, dict) and op.get("src") not in by_lookup:
                 op["src"] = last_id
+        ops = self._route_to_details(ops)
         ops, guard_rejected = self._modeller_guard(ops, items)
         asked = any(i["extraction"].get("new_tab_requested") for i in items)   # not a click during this call
-        if asked and ops and not any(isinstance(op, dict) and op.get("op") == "new_board" for op in ops):
-            # a person asked for a new tab and the modeller drew without opening one: open it for them
+        if (asked or self._carried_shift_lands(items, ops)) and ops \
+                and not any(isinstance(op, dict) and op.get("op") == "new_board" for op in ops) \
+                and self._fits_new_board(ops):
+            # a person asked for a new tab, or a topic shift the board had nothing for (a question naming the new
+            # subject) reached its first content, and the modeller drew without opening one: open it for them (unless
+            # what it drew belongs where it is, like a correction; then a request waits for the next batch)
             ops.insert(0, {"op": "new_board", "id": self._free_board_id("new_topic"), "title": "New topic",
                            "kind": "process", "src": items[0]["utt"]["id"]})
+        ops, empty = self._drop_empty_new_boards(ops)
+        guard_rejected += empty
         seq = self._approval_seq
         ops, held, refused = self._hold_destructive(ops, "modeller")
         result = self.board.apply_ops(ops, by_lookup=by_lookup)
@@ -201,7 +220,8 @@ class AgentPipeline:
         await self._emit_board(result, "modeller")
         if self.new_tab_requested and any(op.get("op") == "new_board" for op in result["applied"]):
             await self.request_new_tab(False)
-        if not result["applied"]:
+        new_board_refused = any(r["op"].get("op") == "new_board" and r["error"] != EMPTY_NEW_BOARD for r in guard_rejected)
+        if not result["applied"] and not held and not new_board_refused:   # drew nothing, not "board too small"
             self._keep_shift(items)
         if self._approval_seq != seq:   # a new proposal (a repeated one is already listed)
             await self._emit_approvals()
@@ -239,9 +259,87 @@ class AgentPipeline:
                 rejected.append({"op": op, "error": f"new_board: {why}"})
             elif name == "undo" and not undo_ok:
                 rejected.append({"op": op, "error": "undo: nobody retracted anything in this batch"})
+            elif name == "extract_subflow":
+                rejected.append({"op": op, "error": "extract_subflow: only the consolidator splits a board"})
             else:
                 kept.append(op)
         return kept, rejected
+
+    def _route_to_details(self, ops: list) -> list:
+        """The modeller edits a detail board through its overview (the active board stays the topic's overview):
+        a switch_board to a detail board becomes one to its overview (if needed) and sends the ops after it to the
+        detail board; an op without a board whose nodes are all on one detail board of the active board, and not
+        all on the active board, goes there. A new node goes where the nodes it is connected to in this batch are
+        (through other new nodes too): a talk that adds to a sub-flow adds a few connected nodes at once."""
+        st = self.board
+        cur, target, placed, out = st.active, None, {}, []     # placed: node id added in this batch -> its board
+
+        def has(bid: str, ref: str) -> bool:
+            b = st.boards[bid]
+            return placed.get(ref) == bid or ref in b["nodes"] or ref in b["edges"] or ref in b["groups"]
+
+        for i, op in enumerate(ops):
+            name = op.get("op") if isinstance(op, dict) else None
+            if name is None:
+                out.append(op)
+                continue
+            if name in ("new_board", "switch_board"):
+                bid = _sid(op.get("id") if name == "new_board" else op.get("board"))
+                parent = (st.boards.get(bid) or {}).get("parent") if name == "switch_board" else None
+                target = bid if parent else None
+                if parent and parent != cur:
+                    out.append({**op, "board": parent})
+                elif not parent:
+                    out.append(op)
+                cur = parent or bid
+                continue
+            kids = st.children(cur) if cur in st.boards else []
+            if not op.get("board") and (target or kids):
+                if target:
+                    op = {**op, "board": target}
+                elif name == "add_node":
+                    anchors = _batch_anchors(ops[i:], _sid(op.get("id")), lambda r: any(has(b, r) for b in [cur, *kids]))
+                    on = lambda b: sum(has(b, a) for a in anchors)  # noqa: E731
+                    best = max(kids, key=on)
+                    if anchors and on(cur) < len(anchors) and (on(best) == len(anchors) or on(best) > on(cur)):
+                        op = {**op, "board": best}
+                else:
+                    edge = str(op.get("edge") or op.get("target") or "")
+                    refs = {_sid(op.get(k)) for k in ("id", "from", "to", "via", "new_from", "new_to", "node")}
+                    refs |= {_sid(x) for x in edge.split("->")} if "->" in edge else {_sid(op.get("target"))}
+                    refs.discard("")
+                    if refs and not all(has(cur, r) for r in refs):
+                        home = next((k for k in kids if all(has(k, r) for r in refs)), None)
+                        if home:
+                            op = {**op, "board": home}
+            if name == "add_node" and op.get("id"):
+                placed[_sid(op["id"])] = _sid(op.get("board")) or cur
+            out.append(op)
+        return out
+
+    @staticmethod
+    def _drop_empty_new_boards(ops: list) -> tuple[list, list]:
+        """A new_board whose ops add no node (up to the next new_board/switch_board) is not opened: an empty tab gets
+        its title from a framing sentence or the meeting's topic, and the next subject's nodes then land under that
+        wrong title. The board is opened when there is something to put on it; the ops meant for it go with it (they
+        would otherwise land on the current board). A topic shift is still carried, as for a batch that drew nothing."""
+        empty: list[dict] = []
+        scope: list | None = None        # the ops of a new board that has no node yet
+        for op in ops:
+            name = op.get("op") if isinstance(op, dict) else None
+            if scope is not None and name in ("new_board", "switch_board"):
+                empty += scope
+                scope = None
+            if name == "new_board":
+                scope = [op]
+            elif scope is not None:
+                scope.append(op)
+                if name == "add_node":
+                    scope = None
+        if scope is not None:
+            empty += scope
+        dropped = {id(op) for op in empty}
+        return [op for op in ops if id(op) not in dropped], [{"op": op, "error": EMPTY_NEW_BOARD} for op in empty]
 
     async def _emit_board(self, result: dict, agent: str, layout: dict | None = None) -> None:
         """Board event after an agent changed the board. `layout`: the plan the consolidator just stored
@@ -258,10 +356,13 @@ class AgentPipeline:
 
     def _keep_shift(self, items: list[dict]) -> None:
         """A batch with a topic shift that changed nothing: a new subject often starts vague ("going on with the
-        bugs"), so the shift waits for the next utterance with content instead of being used up."""
+        bugs"), so the shift waits for the next utterance with content instead of being used up. Not for longer than
+        MAX_SHIFT_CARRY utterances, so an old shift doesn't land on talk that continues the board."""
         flags = [f for f in SHIFT_FLAGS if any(i["extraction"].get(f) for i in items)]
-        if flags and (self.carried_shift is None or SHIFT_FLAGS.index(flags[0]) < SHIFT_FLAGS.index(self.carried_shift)):
-            self.carried_shift = flags[0]
+        hops = max(int(i["extraction"].get("shift_carried") or 0) for i in items)
+        if flags and hops < MAX_SHIFT_CARRY and (
+                self.carried_shift is None or SHIFT_FLAGS.index(flags[0]) < SHIFT_FLAGS.index(self.carried_shift)):
+            self.carried_shift, self.carried_hops = flags[0], hops
 
     async def request_new_tab(self, on: bool) -> dict:
         """New tab button: the next utterance with content starts a new board (on), or never mind (off)."""
@@ -273,6 +374,28 @@ class AgentPipeline:
             self.new_tab_requested = on
             await self.emit({"type": "new_tab", "pending": on}, record=False)
         return {"ok": True}
+
+    def _carried_shift_lands(self, items: list[dict], ops: list) -> bool:
+        """A strong topic shift carried from an utterance that drew nothing, and the modeller now adds new nodes to a
+        board worth leaving (POSSIBLE_SHIFT_MIN_NODES): that content starts the new subject, so it gets its own tab."""
+        active = self.board.boards.get(self.board.active) or {"nodes": {}}
+        return (any(i["extraction"].get("topic_shift") and i["extraction"].get("shift_carried") for i in items)
+                and len(active["nodes"]) >= POSSIBLE_SHIFT_MIN_NODES
+                and any(isinstance(op, dict) and op.get("op") == "add_node" for op in ops))
+
+    def _fits_new_board(self, ops: list) -> bool:
+        """Whether the modeller's ops can start a new board: none goes to another board, undoes, or touches
+        something already on the current one (or on its detail boards: the same topic)."""
+        existing: set[str] = set()
+        for bid in ([self.board.active, *self.board.children(self.board.active)] if self.board.active else []):
+            b = self.board.boards[bid]
+            existing |= {*b["nodes"], *b["edges"], *b["groups"]}
+        for op in ops:
+            if not isinstance(op, dict) or op.get("op") in ("switch_board", "undo") or op.get("board"):
+                return False
+            if any(op.get(k) in existing for k in ("id", "from", "to", "via", "node", "group", "target")):
+                return False
+        return True
 
     def _free_board_id(self, base: str) -> str:
         n, bid = 1, base
@@ -333,15 +456,15 @@ class AgentPipeline:
         return marks
 
     # --------------------------------------------------------- consolidator
-    def _kick_consolidator(self, force: bool = False, board_id: str | None = None) -> None:
-        """Start a cleanup pass on `board_id` (default: the active board)."""
+    def _kick_consolidator(self, force: bool = False, board_id: str | None = None, final: bool = False) -> None:
+        """Start a cleanup pass on `board_id` (default: the active board). final: the meeting is over."""
         if CONSOLIDATE_EVERY <= 0 or (self.consolidator_task and not self.consolidator_task.done()):
             return  # disabled, or one at a time; the next trigger catches up
         if not force and self.meaningful_since_consolidation < CONSOLIDATE_EVERY:
             return
         if board_id is None or board_id == self.board.active:
             self.meaningful_since_consolidation = 0
-        self.consolidator_task = asyncio.create_task(self._run_consolidator(board_id))
+        self.consolidator_task = asyncio.create_task(self._run_consolidator(board_id, final))
 
     def _needs_consolidation(self, bid: str) -> bool:
         """The board changed since its last cleanup pass, or has no layout plan yet."""
@@ -393,6 +516,10 @@ class AgentPipeline:
                                                     "ids stay stable"})
             elif name in CONSOLIDATOR_BLOCKED:
                 rejected.append({"op": op, "error": f"{name}: not allowed for the consolidator"})
+            elif name in ("remove_node", "update_node") and (b["nodes"].get(_sid(op.get("id"))) or {}).get("ref_board"):
+                rejected.append({"op": op, "error": f"{name}: {op['id']!r} is a reference to the overview; left alone"})
+            elif name == "remove_node" and (b["nodes"].get(_sid(op.get("id"))) or {}).get("detail"):
+                rejected.append({"op": op, "error": f"remove_node: {op['id']!r} stands for a detail board; left alone"})
             elif name == "mark" and op.get("status") in ("disputed", "resolved"):
                 rejected.append({"op": op, "error": "mark: the consolidator never opens or closes disputes"})
             elif name in ("mark", "remove_node", "update_node", "disconnect", "reroute") and disputed(
@@ -402,7 +529,7 @@ class AgentPipeline:
                 kept.append(op)
         return kept, rejected
 
-    async def _run_consolidator(self, board_id: str | None = None) -> None:
+    async def _run_consolidator(self, board_id: str | None = None, final: bool = False) -> None:
         try:
             transcript = self._meaningful_transcript()
             bid, hints = board_id or self.board.active, agents.settings.LAYOUT_HINTS
@@ -410,7 +537,8 @@ class AgentPipeline:
                 return
             # The board to clean up is shown in full as "active_board" (the consolidator's prompt edits that one),
             # also when it is not the visible tab (the final pass, or a board just left by a topic shift).
-            compact = {**self.board.compact(full_boards={bid}), "active_board": bid}
+            compact = {**self.board.compact(full_boards={bid}), "active_board": bid,
+                       **({"final_pass": True} if final else {})}
             res = await agents.consolidate(self.meeting, transcript, compact,
                                            layout=self.board.layout_of(bid) if hints else None)
             ops = [op for op in (res.data or {}).get("ops", []) if isinstance(op, dict)]
@@ -463,6 +591,33 @@ def _shape(board: dict) -> str:
     """What a cleanup pass looks at: nodes, edges and groups (not the layout plan or version stamps)."""
     strip = lambda items: {k: {f: v for f, v in x.items() if f not in ("v", "by")} for k, x in items.items()}  # noqa: E731
     return json.dumps([strip(board["nodes"]), strip(board["edges"]), strip(board["groups"])], sort_keys=True, default=str)
+
+
+def _batch_anchors(ops: list, nid: str, exists) -> set[str]:
+    """The existing nodes (exists(id)) a new node is connected to in this batch, directly or through other nodes the
+    batch adds: the connects and reroutes (via) without a board of their own."""
+    links: dict[str, set[str]] = {}
+    for op in ops:
+        if not isinstance(op, dict) or op.get("board") or op.get("op") not in ("connect", "reroute"):
+            continue
+        if op["op"] == "connect":
+            ends = [_sid(op.get("from")), _sid(op.get("to"))]
+        else:
+            ends = [_sid(x) for x in str(op.get("edge") or "").split("->")] + [_sid(op.get("via"))]
+        ends = [e for e in ends if e]
+        for e in ends:
+            links.setdefault(e, set()).update(x for x in ends if x != e)
+    seen, todo, anchors = {nid}, [nid], set()
+    while todo:
+        for x in links.get(todo.pop(), ()):
+            if x in seen:
+                continue
+            seen.add(x)
+            if exists(x):
+                anchors.add(x)
+            else:
+                todo.append(x)
+    return anchors
 
 
 def _plan_line(plan: dict | None) -> str:

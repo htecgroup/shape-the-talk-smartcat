@@ -307,6 +307,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .tab .kind-tag { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: .05em; font-weight: 700; }
 .tab .n { font-size: 11px; color: var(--muted); font-weight: 500; }
 .tab.new { animation: tabflash 1.6s ease 2; }
+/* a detail board (split off its overview): a smaller tab right after the overview's, "↳ Verification" */
+.tab.sub { padding: 6px 10px; font-size: 12px; font-weight: 500; margin-left: -2px; gap: 5px; background: #f8f9fa; }
+.tab.sub.on { background: var(--board); }
+.tab .sub-mark { color: var(--muted); font-weight: 700; }
+.tab.changed::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--purple); }
 /* New tab: "+" at the end of the strip; asked for, it is a dashed tab waiting for the next thing said */
 .tab.tab-add { background: transparent; border-color: transparent; color: var(--muted); padding: 8px 10px; cursor: pointer; }
 .tab.tab-add:hover { background: var(--surface); border-color: var(--line); color: var(--ink); }
@@ -373,6 +378,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .node.ghost .node-label { fill: #868e96; font-weight: 400; }
 .node-note { font-family: var(--sans); font-size: 10.5px; fill: #6c757d; text-anchor: middle; pointer-events: none; }
 .node .halo { fill: none; stroke-width: 7; opacity: 0; pointer-events: none; }
+/* a stub (board/simplify.js): "→ target" next to its source; hovering it points at the target */
+.stub-label { font-family: var(--hand); font-weight: 700; font-size: 13px; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.node.ref-target .halo { opacity: .55; stroke: #f59f00; transition: opacity .15s; }
+/* overview and detail boards: a summary node opens its detail board, a reference node its overview */
+.node.summary:hover .detail-badge rect, .node.ref:hover .shape { filter: brightness(1.08); }
+.node.summary:hover .halo, .node.ref:hover .halo { opacity: .35; stroke: #7048e8; transition: opacity .15s; }
+.detail-badge, .detail-back { pointer-events: none; }
 .node.flash .halo { animation: halo 3.2s ease-out; }
 @keyframes halo { 0% { opacity: .85; stroke-width: 12; } 60% { opacity: .55; } 100% { opacity: 0; stroke-width: 5; } }
 .node.disputed .badge-disputed { animation: wobble 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }

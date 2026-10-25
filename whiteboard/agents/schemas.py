@@ -50,6 +50,13 @@ OP_SCHEMAS = {
     "switch_board": {"board": S},
     "undo": {"target_src": S},
 }
+# Only the consolidator restructures a board into an overview and detail boards.
+SUBFLOW_OP = {"extract_subflow": {"nodes": {**S, "description": "comma-separated node ids"}, "id": S, "label": S,
+                                  "title": NS, "note": NS, "type": NODE_TYPE}}
+ALL_OPS = {**OP_SCHEMAS, **SUBFLOW_OP}
+# Any op may name the board it applies to ("" = the active board): a detail board of the active board.
+BOARD_HELP = ("switch_board: the board to switch to. Any other op: \"\" (the active board), or the id of a detail board "
+              "of the active board to apply it there")
 
 
 def _or_empty(prop: dict) -> dict:
@@ -64,26 +71,39 @@ def _signature(name: str, props: dict) -> str:
     return f"{name}: " + ", ".join(one(k, v) for k, v in props.items())
 
 
-def _flat_op_fields() -> dict[str, dict]:
+def _flat_op_fields(ops: dict[str, dict]) -> dict[str, dict]:
     """Every field of every op, as a string ("" = not used), described with the ops that use it."""
     fields: dict[str, dict] = {}
-    for props in OP_SCHEMAS.values():
+    for props in ops.values():
         for k, v in props.items():
             fields[k] = _or_empty(MARK_STATUS if k == "status" else v)
     for k, v in fields.items():
-        v["description"] = "used by " + ", ".join(n for n, p in OP_SCHEMAS.items() if k in p) + "; else \"\""
+        v["description"] = BOARD_HELP if k == "board" else (
+            "used by " + ", ".join(n for n, p in ops.items() if k in p) + "; else \"\""
+            + (f" ({ops_desc})" if (ops_desc := next((p[k].get("description") for p in ops.values()
+                                                     if k in p and p[k].get("description")), None)) else ""))
     return fields
 
 
-# The descriptions carry what the per-op schemas used to say: which fields each op uses.
-OP_HELP = ("Fill only the fields this op uses; every other field is \"\". "
-           + "; ".join(_signature(n, p) for n, p in OP_SCHEMAS.items()))
-FLAT_OP = {**_obj({"op": {"type": "string", "enum": list(OP_SCHEMAS)}, "src": S, **_flat_op_fields()}),
-           "description": OP_HELP}
+def _flat_op(ops: dict[str, dict]) -> dict:
+    """One flat op object for these ops. The descriptions carry what the per-op schemas used to say: which fields
+    each op uses."""
+    help_ = ("Fill only the fields this op uses; every other field is \"\". "
+             + "; ".join(_signature(n, p) for n, p in ops.items()))
+    return {**_obj({"op": {"type": "string", "enum": list(ops)}, "src": S, **_flat_op_fields(ops)}), "description": help_}
+
+
+FLAT_OP = _flat_op(OP_SCHEMAS)
+CONSOLIDATOR_FLAT_OP = _flat_op(ALL_OPS)
+OP_HELP = FLAT_OP["description"]
 
 MODELLER_SCHEMA = _obj({
     "summary": S,
     "ops": {"type": "array", "items": FLAT_OP},
+})
+CONSOLIDATOR_OPS_SCHEMA = _obj({     # the consolidator without a layout plan (LW_LAYOUT_HINTS=0)
+    "summary": S,
+    "ops": {"type": "array", "items": CONSOLIDATOR_FLAT_OP},
 })
 
 
@@ -102,22 +122,24 @@ LAYOUT_SCHEMA = _obj({
 })
 CONSOLIDATOR_SCHEMA = _obj({
     "summary": S,
-    "ops": {"type": "array", "items": FLAT_OP},
+    "ops": {"type": "array", "items": CONSOLIDATOR_FLAT_OP},
     "layout": LAYOUT_SCHEMA,
 })
 
 
 def clean_ops(data: dict | None) -> dict | None:
-    """Give each op only its own fields, with "" (not used) as null: the shape Board expects."""
+    """Give each op only its own fields, with "" (not used) as null: the shape Board expects. A board named on any
+    op is kept (it applies the op to that board)."""
     if not data or not isinstance(data.get("ops"), list):
         return data
     ops = []
     for op in data["ops"]:
-        fields = OP_SCHEMAS.get(op.get("op"))
+        fields = ALL_OPS.get(op.get("op"))
         if fields is None:
             ops.append(op)
             continue
         ops.append({"op": op["op"], "src": op.get("src"),
+                    **({"board": op["board"]} if op.get("board") else {}),
                     **{k: (op.get(k) if op.get(k) != "" else None) for k in fields}})
     return {**data, "ops": ops}
 

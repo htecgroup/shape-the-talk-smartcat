@@ -123,6 +123,7 @@ class Session(AgentPipeline, ApprovalGate):
         self.meaningful_since_consolidation = 0
         self.consolidated: dict[str, str] = {}   # board id -> its shape after the last cleanup pass
         self.carried_shift: str | None = None    # a topic shift heard in small talk, for the next utterance with content
+        self.carried_hops = 0                    # utterances with content it was already carried to (_keep_shift)
         self.new_tab_requested = False           # New tab button: the next utterance with content opens a new board
         self.questions: list[dict] = []
         self.disagreements: list[dict] = []

@@ -4,6 +4,12 @@ The LLM never draws. It emits typed operations; this module validates and
 applies them to a versioned state. Every change goes through a small set of
 primitives that record their own inverse, so any utterance's changes can be
 undone ("scratch that") without snapshots.
+
+Overview and detail boards: extract_subflow moves a self-contained part of a board (its nodes, the edges between
+them, their groups) to a detail board (board["parent"] = the overview's id) and leaves one summary node on the
+overview (node["detail"] = the detail board's id) that takes over every edge across the cut. On the detail board,
+the overview nodes those edges came from or went to are reference nodes (same id, node["ref_board"] = the
+overview), so it reads on its own. One level: a detail board has no detail boards of its own.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ OP_FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "new_board": ({"id", "title"}, {"kind"}),
     "switch_board": ({"board"}, set()),
     "undo": ({"target_src"}, set()),
+    "extract_subflow": ({"nodes", "id", "label"}, {"note", "title", "type"}),
 }
 COMMON_FIELDS = {"op", "src", "by", "board"}
 # Board ids often are "<subject>_<kind>"; a model that connects to the board id usually means the subject node.
@@ -45,6 +52,7 @@ LAYOUT_SIDES = {"before", "after", "above", "below"}
 LAYOUT_ORIENTATIONS = {"row", "column"}
 LAYOUT_MAX = 24             # max spine entries / placements / group entries kept
 BRIEF_NODES = 30            # node labels of the active board in brief() (the newest ones)
+SUBFLOW_MIN = 3             # extract_subflow moves at least this many nodes to a detail board
 
 
 class OpError(ValueError):
@@ -96,12 +104,21 @@ class BoardState:
             "boards": [copy.deepcopy(self.boards[b]) for b in self.board_order],
         }
 
+    def children(self, bid: str | None) -> list[str]:
+        """The detail boards of a board, in tab order."""
+        return [c for c in self.board_order if self.boards[c].get("parent") == bid] if bid else []
+
+    def top_level(self) -> list[str]:
+        """The topic boards (tabs that are not detail boards), in tab order."""
+        return [b for b in self.board_order if not self.boards[b].get("parent")]
+
     def compact(self, full_boards: set[str] | None = None) -> dict:
-        """Small JSON for prompts. Full detail for the active board, labels for the rest."""
-        full_boards = full_boards or ({self.active} if self.active else set())
+        """Small JSON for prompts. Full detail for the active board and its detail boards, labels for the rest."""
+        full_boards = full_boards or ({self.active, *self.children(self.active)} if self.active else set())
         out = {"active_board": self.active, "boards": []}
         for bid in self.board_order:
             b = self.boards[bid]
+            parent = {"parent": b["parent"]} if b.get("parent") else {}
             if bid in full_boards:
                 nodes = []
                 for n in b["nodes"].values():
@@ -116,6 +133,9 @@ class BoardState:
                         item["assignee"] = n["assignee"]
                     if n.get("done"):
                         item["done"] = True
+                    for k in ("detail", "ref_board"):
+                        if n.get(k):
+                            item[k] = n[k]
                     nodes.append(item)
                 edges = []
                 for e in b["edges"].values():
@@ -128,7 +148,7 @@ class BoardState:
                         item["note"] = e["note"]
                     edges.append(item)
                 out["boards"].append({
-                    "id": bid, "title": b["title"], "kind": b["kind"],
+                    "id": bid, "title": b["title"], "kind": b["kind"], **parent,
                     "nodes": nodes, "edges": edges,
                     "groups": [{"id": g["id"], "label": g["label"],
                                 **({"kind": g["kind"]} if g.get("kind") == "task_list" else {}),
@@ -137,18 +157,23 @@ class BoardState:
                 })
             else:
                 out["boards"].append({
-                    "id": bid, "title": b["title"], "kind": b["kind"],
+                    "id": bid, "title": b["title"], "kind": b["kind"], **parent,
                     "nodes": [f'{n["id"]} ({n["label"]})' for n in b["nodes"].values()],
                 })
         return out
 
     def brief(self) -> dict:
         """What the extractor needs to tell whether an utterance still belongs on the shown diagram: the active
-        board's title, kind and newest node labels, and the titles of the other boards."""
+        board's title, kind and newest node labels (its detail boards' too: they are the same topic), and the titles
+        of the other topic boards."""
         b = self.boards.get(self.active) if self.active else None
-        current = {"title": b["title"], "kind": b["kind"],
-                   "nodes": [n["label"] for n in b["nodes"].values()][-BRIEF_NODES:]} if b else None
-        return {"current": current, "others": [self.boards[i]["title"] for i in self.board_order if i != self.active]}
+        current = None
+        if b:
+            labels = [n["label"] for bid in (self.active, *self.children(self.active))
+                      for n in self.boards[bid]["nodes"].values() if not n.get("ref_board")]
+            current = {"title": b["title"], "kind": b["kind"], "nodes": labels[-BRIEF_NODES:]}
+        topic = self.boards[self.active].get("parent") or self.active if b else None
+        return {"current": current, "others": [self.boards[i]["title"] for i in self.top_level() if i != topic]}
 
     def find_target(self, board_id: str, target: str) -> tuple[str, dict] | None:
         b = self.boards.get(board_id)
@@ -296,6 +321,11 @@ class BoardState:
                 op[k] = slug(op[k])
                 if not op[k]:
                     raise OpError(f"{name}: empty {k}")
+        if name == "extract_subflow":
+            raw_nodes = op["nodes"] if isinstance(op["nodes"], list) else re.split(r"[,\s]+", str(op["nodes"]))
+            op["nodes"] = list(dict.fromkeys(x for x in (slug(n) for n in raw_nodes) if x))
+            if not op["nodes"]:
+                raise OpError("extract_subflow: no nodes")
         if "type" in op and op["type"] is not None and op["type"] not in NODE_TYPES:
             raise OpError(f"{name}: bad node type {op['type']!r}")
         if "status" in op and op["status"] is not None and op["status"] not in STATUSES:
@@ -503,6 +533,16 @@ class BoardState:
         self._put_node(bid, node, op["id"])
         if old["type"] == "actor" and node["type"] != "actor":
             self._unassign_from(bid, op["id"], op)
+        for ref, cid in self._refs_to(bid, op["id"]):        # its references on detail boards show it the same
+            if (ref["label"], ref["type"]) != (node["label"], node["type"]):
+                new = {**copy.deepcopy(ref), "label": node["label"], "type": node["type"]}
+                self._stamp(new, op)
+                self._put_node(cid, new, ref["id"])
+
+    def _refs_to(self, bid: str, nid: str) -> list[tuple[dict, str]]:
+        """(reference node, detail board) of a node of board bid on bid's detail boards."""
+        return [(self.boards[c]["nodes"][nid], c) for c in self.children(bid)
+                if (self.boards[c]["nodes"].get(nid) or {}).get("ref_board") == bid]
 
     def _op_remove_node(self, op: dict) -> None:
         bid = self._board_for(op)
@@ -514,6 +554,11 @@ class BoardState:
                 self._put_edge(bid, None, eid)
         self._unassign_from(bid, op["id"], op)
         self._put_node(bid, None, op["id"])
+        for ref, cid in self._refs_to(bid, op["id"]):        # and its references on detail boards
+            for eid, e in list(self.boards[cid]["edges"].items()):
+                if ref["id"] in (e["from"], e["to"]):
+                    self._put_edge(cid, None, eid)
+            self._put_node(cid, None, ref["id"])
 
     def _add_edge(self, bid: str, src: str, dst: str, op: dict, label=None, status=None, note=None):
         b = self.boards[bid]
@@ -548,7 +593,147 @@ class BoardState:
         bid = self._board_for(op)
         for key in ("from", "to"):
             self._node_ref(bid, op, key)
+        far = [k for k in ("from", "to") if op[k] not in self.boards[bid]["nodes"]]
+        home = self._family_home(bid, op[far[0]]) if len(far) == 1 else None
+        if home:
+            self._cross_connect(bid, home, op, far[0])
+            return
         self._add_edge(bid, op["from"], op["to"], op, op.get("label"), op.get("status"), op.get("note"))
+
+    # ------------------------------------------------------- detail boards
+    def _family_home(self, bid: str, nid: str) -> str | None:
+        """Where a node that is not on board `bid` lives in its family: on one of its detail boards (bid is an
+        overview), or on its overview (bid is a detail board; not the summary node of bid itself)."""
+        parent = self.boards[bid].get("parent")
+        if parent is None:
+            return next((c for c in self.children(bid) if nid in self.boards[c]["nodes"]
+                         and not self.boards[c]["nodes"][nid].get("ref_board")), None)
+        node = (self.boards.get(parent) or {"nodes": {}})["nodes"].get(nid)
+        return parent if node and node.get("detail") != bid else None
+
+    def _summary_of(self, detail: str) -> str | None:
+        parent = self.boards[detail].get("parent")
+        nodes = self.boards[parent]["nodes"] if parent in self.boards else {}
+        return next((nid for nid, n in nodes.items() if n.get("detail") == detail), None)
+
+    def _ref_node(self, node: dict, home: str, op: dict) -> dict:
+        """A reference on a detail board to a node of its overview: same id, label and type."""
+        ref = {"id": node["id"], "label": node["label"], "type": node["type"], "status": "confirmed",
+               "note": None, "group": None, "created_v": self.version, "ref_board": home}
+        self._stamp(ref, op)
+        return ref
+
+    def _cross_connect(self, bid: str, home: str, op: dict, far_key: str) -> None:
+        """A connect between a node of an overview and a node of one of its detail boards: the edge goes on the detail
+        board (from or to a reference of the overview node, added if missing), and the overview gets the edge between
+        that node and the summary node, if it has none yet."""
+        detail, parent = (home, bid) if self.boards[home].get("parent") == bid else (bid, home)
+        outer = op[far_key] if home == parent else op["to" if far_key == "from" else "from"]
+        summary = self._summary_of(detail)
+        if summary is None:
+            raise OpError(f"{op['op']}: detail board {detail!r} has no summary node on {parent!r}")
+        if outer == summary:
+            raise OpError(f"{op['op']}: {summary!r} stands for the detail board {detail!r} itself")
+        if outer not in self.boards[detail]["nodes"]:
+            self._put_node(detail, self._ref_node(self.boards[parent]["nodes"][outer], parent, op), outer)
+        self._add_edge(detail, op["from"], op["to"], op, op.get("label"), op.get("status"), op.get("note"))
+        a, z = (outer, summary) if op["from"] == outer else (summary, outer)
+        if edge_id(a, z) not in self.boards[parent]["edges"]:
+            self._add_edge(parent, a, z, op, op.get("label"), op.get("status"))
+
+    def _op_extract_subflow(self, op: dict) -> None:
+        """Move a self-contained part of a board to a new detail board; one summary node stands for it on the
+        board, with every edge across the cut (parallel ones merged). See the module docstring. With the id of an
+        existing summary node, the nodes join that summary's detail board instead (references to them there become
+        the nodes themselves, their edges to the summary node are dropped: the detail board has them)."""
+        bid = self._board_for(op)
+        b = self.boards[bid]
+        if b.get("parent"):
+            raise OpError(f"extract_subflow: {bid!r} is a detail board already (one level only)")
+        sid = op["id"]
+        did = (b["nodes"].get(sid) or {}).get("detail")
+        extend = did in self.boards
+        cut = [nid for nid in b["nodes"] if nid in set(op["nodes"])]     # in board order
+        missing = [nid for nid in op["nodes"] if nid not in b["nodes"]]
+        if missing:
+            raise OpError(f"extract_subflow: no node {', '.join(map(repr, missing))}")
+        if len(cut) < (1 if extend else SUBFLOW_MIN):
+            raise OpError(f"extract_subflow: needs at least {SUBFLOW_MIN} nodes")
+        if len(cut) >= len(b["nodes"]) - extend:
+            raise OpError("extract_subflow: would leave nothing on the board")
+        if any(b["nodes"][nid].get("detail") for nid in cut):
+            raise OpError("extract_subflow: a summary node stays on its board (one level only)")
+        inside = set(cut)
+        if extend:
+            taken = [nid for nid in cut if nid in self.boards[did]["nodes"] and not self.boards[did]["nodes"][nid].get("ref_board")]
+            if taken:
+                raise OpError(f"extract_subflow: {taken[0]!r} is on the detail board already")
+            if op.get("note") and op["note"] != b["nodes"][sid].get("note"):
+                summary = {**copy.deepcopy(b["nodes"][sid]), "note": op["note"]}
+                self._stamp(summary, op)
+                self._put_node(bid, summary, sid)
+        else:
+            if (sid in b["nodes"] and sid not in inside) or sid in b["groups"]:
+                raise OpError(f"extract_subflow: {sid!r} already exists on the board")
+            did, n = f"{sid}_detail", 1
+            while did in self.boards:
+                n += 1
+                did = f"{sid}_detail_{n}"
+            detail = self._empty_board(did, op.get("title") or op["label"], b["kind"])
+            detail.update(parent=bid, by=op.get("by"), src=op.get("src"))
+            self._put_board(did, detail)
+            # the tab right after its overview and the overview's other detail tabs
+            order = [x for x in self.board_order if x != did]
+            at = max(i for i, x in enumerate(order) if x == bid or self.boards[x].get("parent") == bid) + 1
+            self.board_order = order[:at] + [did] + order[at:]
+
+        groups = {b["nodes"][nid].get("group") for nid in cut}
+        for nid in cut:                                       # the nodes keep who said them
+            self._put_node(did, copy.deepcopy(b["nodes"][nid]), nid)
+        for gid, g in list(b["groups"].items()):
+            members = [nid for nid, x in b["nodes"].items() if x.get("group") == gid]
+            if not any(m in inside for m in members):
+                continue
+            if gid not in self.boards[did]["groups"]:
+                moved = copy.deepcopy(g)
+                if moved.get("owner") not in inside:
+                    moved.pop("owner", None)
+                self._put_group(did, moved, gid)
+            if all(m in inside for m in members):
+                self._put_group(bid, None, gid)
+        across: dict[tuple[str, str], list[dict]] = {}       # overview edge (outside node <-> summary) -> edges
+        for eid, e in list(b["edges"].items()):
+            fi, ti = e["from"] in inside, e["to"] in inside
+            if not (fi or ti):
+                continue
+            outer = None if fi and ti else e["to"] if fi else e["from"]
+            if outer is not None and outer != sid:
+                if outer not in self.boards[did]["nodes"]:
+                    self._put_node(did, self._ref_node(b["nodes"][outer], bid, op), outer)
+                across.setdefault((sid, outer) if fi else (outer, sid), []).append(e)
+            if outer != sid:
+                self._put_edge(did, copy.deepcopy(e), eid)
+            self._put_edge(bid, None, eid)
+        for nid in cut:
+            self._put_node(bid, None, nid)
+        if not extend:
+            group = next(iter(groups)) if len(groups) == 1 else None
+            summary = {"id": sid, "label": op["label"], "type": op.get("type") or ("system" if b["kind"] == "architecture" else "step"),
+                       "status": "confirmed", "note": op.get("note"), "group": group if group in b["groups"] else None,
+                       "created_v": self.version, "detail": did}
+            self._stamp(summary, op)
+            self._put_node(bid, summary, sid)
+        for (a, z), es in across.items():
+            if edge_id(a, z) in b["edges"]:                   # extending: the summary node has that edge already
+                continue
+            labels = list(dict.fromkeys(e["label"] for e in es if e.get("label")))
+            statuses = {e["status"] for e in es}
+            status = ("disputed" if "disputed" in statuses else
+                      "confirmed" if statuses & {"confirmed", "resolved"} else "ghost")
+            edge = {"id": edge_id(a, z), "from": a, "to": z, "label": " / ".join(labels) if len(labels) <= 2 else None,
+                    "status": status, "note": next((e.get("note") for e in es if e["status"] == "disputed"), None)}
+            self._stamp(edge, op)
+            self._put_edge(bid, edge, edge["id"])
 
     def _resolve_edge(self, bid: str, ref: str, opname: str) -> dict:
         b = self.boards[bid]
